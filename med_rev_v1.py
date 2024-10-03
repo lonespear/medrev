@@ -5,10 +5,15 @@ from Bio import Entrez
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
+
+from transformers import AutoTokenizer, AutoModel
 
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
+from sklearn.decomposition import PCA, LatentDirichletAllocation, NMF
+from sklearn.manifold import TSNE
+from umap import UMAP
 
 
 def search_pubmed(query, max_results=2000):
@@ -40,27 +45,7 @@ def search_pubmed(query, max_results=2000):
 
 # Update the parse_articles function
 def parse_articles(records, long_study=True, rev_paper=True, sys_rev=True, clinical_trial=True, meta_analysis=True, rand_ct=True):
-    """
-            if not long_study:
-            for row in data:
-                row.pop("LongitudinalStudy", None)
-        if not rev_paper:
-            for row in data:
-                row.pop("Review", None)
-        if not sys_rev:
-            for row in data:
-                row.pop("SysRev", None)
-        if not clinical_trial:
-            for row in data:
-                row.pop("ClinicalTrial", None)
-        if not meta_analysis:
-            for row in data:
-                row.pop("MetaAnalysis", None)
-        if not randomized_controlled_trial:
-            for row in data:
-                row.pop("RCT", None)
-    Parse the PubMed articles to extract relevant information.
-    
+    """  
     :param records: The PubMed records in XML format.
     :return: A list of dictionaries containing the extracted information.
     """
@@ -100,39 +85,23 @@ def parse_articles(records, long_study=True, rev_paper=True, sys_rev=True, clini
         is_clinical_trial = any(pub_type.lower() == "clinical trial" for pub_type in article_type_list)
         is_meta_analysis = any(pub_type.lower() == "meta-analysis" for pub_type in article_type_list)
         is_randomized_controlled_trial = any(pub_type.lower() == "randomized controlled trial" for pub_type in article_type_list)
-
-        # Flag whether the abstract mentions "risk of breast cancer"
-        LCIS = "Lobular carcinoma in situ" in abstract.lower()
-        
-        # Flag whether the abstract mentions terms indicating a longitudinal study
         longitudinal_terms = ["longitudinal", "long-term follow up", "long term follow up", "follow-up", "follow up"]
         longitudinal_study = any(term in abstract.lower() for term in longitudinal_terms)
-
-        # Medical Terms
-        breast_cancer_terms = ["breast cancer", "mammary carcinoma", "invasive ductal carcinoma (IDC)", 
-                               "invasive lobular carcinoma (ILC)", "ductal carcinoma in situ (DCIS)", 
-                               "lobular carcinoma in situ (LCIS)", "triple-negative breast cancer",
-                               "HER2-positive breast cancer", "BRCA1 mutations", "BRCA2 mutations", 
-                               "metastatic breast cancer", "hormone receptor-positive breast cancer", 
-                               "estrogen receptor-positive (ER-positive)", "progesterone receptor-positive (PR-positive)"]
-        breast_cancer = any(term in abstract.lower() for term in breast_cancer_terms)
 
         # Append the extracted and flagged data to the list
         data.append({
             "PublicationYear": pub_year,
-            "Title": title,
             "Authors": authors,
+            "Title": title,
             "Abstract": abstract,
+            "JournalName": journal_name,
+            "PubMedURL": url,
             "Review": 1 if is_review else 0,
             "SysRev": 1 if is_sys_rev else 0,
             "ClinicalTrial": 1 if is_clinical_trial else 0,
             "MetaAnalysis": 1 if is_meta_analysis else 0,
             "RCT": 1 if is_randomized_controlled_trial else 0,
-            "LongitudinalStudy": 1 if longitudinal_study else 0,
-            "LCIS": 1 if LCIS else 0,
-            "BreastCancer": 1 if breast_cancer else 0,
-            "PubMedURL": url,
-            "JournalName": journal_name,
+            "LongitudinalStudy": 1 if longitudinal_study else 0
         })
 
         # Remove columns based on unchecked categories
@@ -154,19 +123,22 @@ def parse_articles(records, long_study=True, rev_paper=True, sys_rev=True, clini
         if not rand_ct:
             for row in data:
                 row.pop("RCT", None)
-
     return data
 
-def run_cluster(df, n_clusters, n_key_words, method, dimred):
+def run_cluster(df, n_clusters, n_key_words, method):
     # Ensure we are using the K-Means method with PCA dimensionality reduction for this test
-    if method == "K-Means" and dimred == "PCA":
+    if method == "K-Means" or method == "LDA":
         text_data = df['Title'].fillna('') + ' ' + df['Abstract'].fillna('')
         vectorizer = TfidfVectorizer(max_features=20, stop_words='english')
         X = vectorizer.fit_transform(text_data)
 
+        if method == "K-Means":
         # Perform K-Means clustering
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42).fit(X)
-        df['Cluster'] = kmeans.labels_
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42).fit(X)
+            df['Cluster'] = kmeans.labels_
+        elif method == "LDA":
+            lda = LatentDirichletAllocation(n_components=n_clusters, random_state=42, max_iter=10, learning_method='batch')
+            df['Cluster'] = lda.fit_transform(X).argmax(axis=1)
         
         # Count the number of articles in each cluster
         cluster_sizes = df['Cluster'].value_counts()
@@ -184,7 +156,57 @@ def run_cluster(df, n_clusters, n_key_words, method, dimred):
     # Return empty values if the selected method and dimension reduction aren't "K-Means" and "PCA"
     return pd.Series(), {}
 
-search_terms = [
+def visualize():
+    # Reduce dimensionality for K-Means using PCA
+    pca_kmeans = PCA(n_components=2)
+    kmeans_data = pca_kmeans.fit_transform(tfidf_matrix.toarray())
+
+    # Reduce dimensionality for LDA visualization using t-SNE
+    tsne = TSNE(n_components=2, random_state=42, perplexity=30)
+    tsne_lda = tsne.fit_transform(lda_matrix)
+
+    # Define a list of discrete colors, one for each cluster
+    colors = ['blue', 'green', 'orange', 'purple', 'brown']
+    cmap = ListedColormap(colors)
+
+    # Create a scatter plot of the clusters
+    plt.figure(figsize=(14, 8))
+
+    # Subplot 1: K-Means
+    plt.subplot(1,2,1)
+    # Use the cluster labels to color the points
+    plt.scatter(kmeans_data[:, 0], kmeans_data[:, 1], c=kmeans_labels, cmap='viridis', s=50, alpha=0.6, marker='x')
+
+    # Label the axes
+    plt.title('K-Means Clustering of Abstracts (2D PCA Projection)')
+    plt.xlabel('PCA Component 1')
+    plt.ylabel('PCA Component 2')
+
+    # Show the cluster centers on the 2D plot
+    centers_2d = pca_kmeans.transform(kmeans.cluster_centers_)
+    plt.scatter(centers_2d[:, 0], centers_2d[:, 1], c='red', s=200, alpha=0.75, marker='X')
+
+    # Create a discrete legend for the clusters
+    handles = [plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=color, markersize=10) for color in colors]
+    labels = [f'Cluster {i}' for i in range(num_clusters)]
+    plt.legend(handles, labels, title='Clusters')
+
+    # Subplot 2: LDA
+    plt.subplot(1,2,2)
+    plt.scatter(tsne_lda[:, 0], tsne_lda[:, 1], c=lda_matrix.argmax(axis=1), cmap='tab10', s=50, alpha=0.6, marker='x')
+    plt.title('LDA Topic Clustering Visualization')
+    plt.xlabel('PCA Component 1')
+    plt.ylabel('PCA Component 2')
+    # Create a discrete legend for the topics
+    handles = [plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=color, markersize=10) for color in colors]
+    labels = [f'Topic {i}' for i in range(num_topics)]
+    plt.legend(handles, labels, title='Topics')
+
+    # Show the side by side plots
+    plt.tight_layout()
+    plt.show()
+
+adh_terms = [
     "Atypical ductal hyperplasia", 
     "Atypical hyperplasia of the breast", 
     "Atypical breast hyperplasia", 
@@ -199,37 +221,17 @@ search_terms = [
     "ADL", 
     "ADH", 
     "LCIS", 
-    "Lobular carcinoma in situ",
-    "Breast cancer", 
-    "Mammary carcinoma", 
-    "Invasive ductal carcinoma (IDC)", 
-    "Invasive lobular carcinoma (ILC)", 
-    "Ductal carcinoma in situ (DCIS)", 
-    "Lobular carcinoma in situ (LCIS)", 
-    "Triple-negative breast cancer", 
-    "HER2-positive breast cancer", 
-    "BRCA1 mutations", 
-    "BRCA2 mutations", 
-    "Metastatic breast cancer", 
-    "Hormone receptor-positive breast cancer", 
-    "Estrogen receptor-positive (ER-positive)", 
-    "Progesterone receptor-positive (PR-positive)", 
-    "Breast neoplasm", 
-    "Breast tumor", 
-    "Oncogene (related to breast cancer)", 
-    "Breast cancer survival", 
-    "Breast cancer risk factors", 
-    "Breast cancer prevention", 
-    "Breast cancer recurrence", 
-    "Breast cancer metastasis", 
-    "BRCA mutation", 
-    "Genetic predisposition", 
-    "Family history of breast cancer", 
-    "Hormone replacement therapy (HRT)", 
-    "upgrade", 
-    "upstage", 
-    "upstaging"
+    "Lobular carcinoma in situ"
+    "Breast cancer"
 ]
+
+breast_cancer_terms = [
+    "breast cancer", "mammary carcinoma", "invasive ductal carcinoma (IDC)", 
+    "invasive lobular carcinoma (ILC)", "ductal carcinoma in situ (DCIS)", 
+    "lobular carcinoma in situ (LCIS)", "triple-negative breast cancer",
+    "HER2-positive breast cancer", "BRCA1 mutations", "BRCA2 mutations", 
+    "metastatic breast cancer", "hormone receptor-positive breast cancer", 
+    "estrogen receptor-positive (ER-positive)", "progesterone receptor-positive (PR-positive)"]
 
 # Instantiate df
 # Initialize df in session state if not already present
@@ -241,13 +243,32 @@ st.set_page_config(layout="wide")
 # Title
 st.title("Systematic Review Tool for PubMed")
 
+st.write("""
+         **This tool is designed to aid medical researchers in conducting comprehensive literature reviews by performing broad queries on 
+         PubMed to capture a vast array of articles. By utilizing Natural Language Processing (NLP) techniques, the tool systematically 
+         analyzes the retrieved articles, parsing key details such as abstracts, authors, and publication types. It then applies clustering 
+         algorithms to group and categorize the articles based on thematic similarities, enabling researchers to quickly discern the body of 
+         literature relevant to their research area. This systematic approach provides a structured way to explore and understand the existing 
+         knowledge landscape within PubMed, enhancing the efficiency and accuracy of the literature review process.**
+         """)
+
+st.divider()
+
+
 st.subheader("Scraping Tool")
 
-included = st_tags(
-    value=search_terms,
+included_1 = st_tags(
+    value=adh_terms,
     label="#### Include words or phrases:",
     text="Press enter to add more",
-    key='included'
+    key='included1'
+)
+
+included_2 = st_tags(
+    value=breast_cancer_terms,
+    label="#### Include words or phrases:",
+    text="Press enter to add more",
+    key='included2'
 )
 
 excluded = st_tags(
@@ -257,45 +278,52 @@ excluded = st_tags(
     key='excluded'
 )
 
-query_inc = " OR ".join([f'"{term}"' for term in included])
+query_inc1 = " OR ".join([f'"{term}"' for term in included_1])
+query_inc2 = " OR ".join([f'"{term}"' for term in included_1])
 query_ex = " AND ".join([f'NOT "{term}"' for term in excluded])
-query = f'({query_inc}) {query_ex}'
+query = f'(({query_inc1}) " AND " ({query_inc2})) {query_ex}'
 
 st.write('##### Final Query')
 st.write(query)
 
-c3, c4, c5, _ , c9= st.columns([3, 3, 3, 8, 3])
+c3, c4, c5, c6, _, c9= st.columns([3, 4, 4, 4, 8, 3])
 
 with c3:
     max_results = st.number_input('Maximum Results', min_value=500, max_value=20000, value=2000, step=1)
 
 with c4:
-    long_study = st.checkbox("Longitudinal Study", value = True)
-    rev_paper = st.checkbox("Review Paper", value = True)
+    long_study = st.checkbox("Longitudinal Study", value = True, key='long')
+    rev_paper = st.checkbox("Review Paper", value = True, key='rev')
 
 with c5:
-    sys_rev = st.checkbox("Systematic Review", value = True)
-    clinical_trial = st.checkbox("Review Paper", value = True)
+    sys_rev = st.checkbox("Systematic Review", value = True, key='sys')
+    clin_trial = st.checkbox("Review Paper", value = True, key='clin')
+
+with c6:
+    meta = st.checkbox("Meta Analysis", value = True, key='meta')
+    rct = st.checkbox("RCT", value = True, key='rct')
 
 with c9:
     run_query = st.button("Run Search", type='primary')
 
 # Perform the search when the button is clicked
 if run_query:
-    if included == []:
+    if included_1 == []:
         st.write("Query is empty!")
         run_query = False
     else:
-        st.write("Searching PubMed...")
+        placeholder = st.empty()
+        placeholder.write("Searching PubMed...")
         # Provide your email for the Entrez API
         Entrez.email = "your.email@example.com"  # Replace with your email
         records = search_pubmed(query, max_results=max_results)
         
         # Parse the search results
-        articles = parse_articles(records, long_study=True, rev_paper=True, sys_rev=True, clinical_trial=True, meta_analysis=True, rand_ct=True)
+        articles = parse_articles(records, long_study=long_study, rev_paper=rev_paper, sys_rev=sys_rev, clinical_trial=clin_trial, meta_analysis=meta, rand_ct=rct)
         
         # Convert parsed articles to DataFrame
         st.session_state.df = pd.DataFrame(articles)  # Store df in session state
+        placeholder.empty()
 
 # Display the search results if they exist in the session state
 if st.session_state.df is not None and not st.session_state.df.empty:
@@ -355,49 +383,8 @@ if cluster_btn:
                 file_name='pubmed_clustered_results.csv',
                 mime='text/csv',
             )
-            c20, c21 = st.columns([5,5])
+            c20, c21 = st.columns([2,5])
             with c20:
                 st.write("Cluster Sizes:", st.session_state.cluster_sizes)
             with c21:
                 st.write("Top Keywords per Cluster:", pd.DataFrame(st.session_state.cluster_keywords))
-
-
-   
-def cluster_and_filter_relevance(df, n_clusters=5, n_key_words=10):
-    """
-    Perform K-means clustering on the articles' abstracts and filter the most relevant clusters.
-    
-    :param df: DataFrame containing the articles data.
-    :param n_clusters: Number of clusters to create.
-    :param n_key_words: Number of top keywords to use for filtering relevant clusters.
-    :return: Filtered DataFrame with relevant clusters, and a dictionary containing cluster keywords.
-    """
-    # Combine title and abstract into a single text field
-    df['Title_Abstract'] = df['Title'] + ' ' + df['Abstract']
-    
-    # Vectorize the text data
-    vectorizer = TfidfVectorizer(stop_words='english')
-    X = vectorizer.fit_transform(df['Title_Abstract'].fillna(''))
-    
-    # Perform K-means clustering
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42).fit(X)
-    df['Cluster'] = kmeans.labels_
-    
-    # Analyze the clusters to determine relevance
-    # Initialize a dictionary to store the keywords for each cluster
-    cluster_keywords = {}
-    order_centroids = kmeans.cluster_centers_.argsort()[:, ::-1]
-    terms = vectorizer.get_feature_names_out()
-    
-    # Iterate through each cluster and store the top n keywords
-    for i in range(n_clusters):
-        cluster_keywords[i] = [terms[ind] for ind in order_centroids[i, :n_key_words]]
-    
-    # Here you could filter clusters based on relevance, or simply drop the combined column
-    df_filtered = df.copy()  # If you want to perform further filtering, modify df_filtered
-    
-    # Remove the Title_Abstract column before returning
-    df_filtered.drop(columns=['Title_Abstract'], inplace=True)
-    
-    # Return both the filtered DataFrame and the cluster_keywords dictionary
-    return df_filtered, cluster_keywords

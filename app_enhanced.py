@@ -10,6 +10,8 @@ from Bio import Entrez
 import time
 from datetime import datetime
 import io
+import re
+from streamlit_tags import st_tags
 from clustering_enhanced import EnhancedClusterer, ReviewComparator, create_interactive_plot
 
 # Page configuration
@@ -41,6 +43,8 @@ if 'review_data' not in st.session_state:
     st.session_state.review_data = None
 if 'comparison_results' not in st.session_state:
     st.session_state.comparison_results = None
+if 'query_groups' not in st.session_state:
+    st.session_state.query_groups = [{'terms': [], 'operator': 'AND'}]
 
 
 def scrape_pubmed(query: str, email: str, max_results: int = 10000, 
@@ -102,21 +106,21 @@ def scrape_pubmed(query: str, email: str, max_results: int = 10000,
             for record in records['PubmedArticle']:
                 try:
                     article = record['MedlineCitation']['Article']
-                    
+
                     # Extract authors
                     authors = []
                     if 'AuthorList' in article:
                         for author in article['AuthorList']:
                             if 'LastName' in author and 'Initials' in author:
                                 authors.append(f"{author['LastName']} {author['Initials']}")
-                    
+
                     # Extract abstract
                     abstract = ''
                     if 'Abstract' in article:
                         abstract_parts = article['Abstract'].get('AbstractText', [])
                         if abstract_parts:
                             abstract = ' '.join([str(part) for part in abstract_parts])
-                    
+
                     # Extract year
                     year = None
                     if 'ArticleDate' in article and article['ArticleDate']:
@@ -125,7 +129,20 @@ def scrape_pubmed(query: str, email: str, max_results: int = 10000,
                         pub_date = article['Journal']['JournalIssue'].get('PubDate', {})
                         if 'Year' in pub_date:
                             year = int(pub_date['Year'])
-                    
+
+                    # Identify article types from publication type list
+                    article_type_list = article.get('PublicationTypeList', [])
+                    is_review = any(pub_type.lower() == "review" for pub_type in article_type_list)
+                    is_sys_rev = any(pub_type.lower() == "systematic review" for pub_type in article_type_list)
+                    is_clinical_trial = any(pub_type.lower() == "clinical trial" for pub_type in article_type_list)
+                    is_meta_analysis = any(pub_type.lower() == "meta-analysis" for pub_type in article_type_list)
+                    is_rct = any(pub_type.lower() == "randomized controlled trial" for pub_type in article_type_list)
+
+                    # Detect longitudinal studies from abstract keywords
+                    longitudinal_terms = ["longitudinal", "long-term follow up", "long term follow up",
+                                         "follow-up", "follow up", "prospective cohort"]
+                    is_longitudinal = any(term in abstract.lower() for term in longitudinal_terms)
+
                     all_records.append({
                         'PMID': record['MedlineCitation']['PMID'],
                         'Title': article.get('ArticleTitle', ''),
@@ -133,7 +150,13 @@ def scrape_pubmed(query: str, email: str, max_results: int = 10000,
                         'Authors': '; '.join(authors),
                         'Journal': article.get('Journal', {}).get('Title', ''),
                         'Year': year,
-                        'URL': f"https://pubmed.ncbi.nlm.nih.gov/{record['MedlineCitation']['PMID']}/"
+                        'URL': f"https://pubmed.ncbi.nlm.nih.gov/{record['MedlineCitation']['PMID']}/",
+                        'Review': 1 if is_review else 0,
+                        'SystematicReview': 1 if is_sys_rev else 0,
+                        'ClinicalTrial': 1 if is_clinical_trial else 0,
+                        'MetaAnalysis': 1 if is_meta_analysis else 0,
+                        'RCT': 1 if is_rct else 0,
+                        'LongitudinalStudy': 1 if is_longitudinal else 0
                     })
                 except Exception as e:
                     continue
@@ -153,6 +176,46 @@ def scrape_pubmed(query: str, email: str, max_results: int = 10000,
 def export_results(df: pd.DataFrame, filename: str = "results.csv") -> bytes:
     """Export DataFrame to CSV"""
     return df.to_csv(index=False).encode('utf-8')
+
+
+def build_query_from_groups(query_groups):
+    """
+    Build PubMed query string from query groups.
+
+    Args:
+        query_groups: List of dicts with 'terms' and 'operator' keys
+
+    Returns:
+        Query string
+    """
+    if not query_groups or all(not group['terms'] for group in query_groups):
+        return ""
+
+    query_parts = []
+    for i, group in enumerate(query_groups):
+        if not group['terms']:
+            continue
+
+        # Build group query (OR all terms within the group)
+        group_query = " OR ".join([f'"{term}"' for term in group['terms']])
+
+        # Wrap in parentheses
+        if len(group['terms']) > 1:
+            group_query = f"({group_query})"
+        else:
+            group_query = f'"{group["terms"][0]}"'
+
+        # Add operator prefix for groups after the first
+        if i == 0:
+            query_parts.append(group_query)
+        else:
+            operator = group['operator']
+            if operator == "NOT":
+                query_parts.append(f"NOT {group_query}")
+            else:
+                query_parts.append(f"{operator} {group_query}")
+
+    return " ".join(query_parts)
 
 
 def main():
@@ -183,20 +246,60 @@ def main():
         if data_source == "Scrape PubMed":
             st.subheader("PubMed Search")
             email = st.text_input("Email (required by NCBI)", value="user@example.com")
-            query = st.text_area(
-                "Search Query",
-                value='("genes" OR "genetics" OR "GWAS") AND ("exercise" OR "physical activity")',
-                help="Enter PubMed search query"
-            )
-            
+
+            st.markdown("### Query Builder")
+            st.markdown("Build your query by adding keyword groups. Terms within each group are combined with OR, and groups are chained with AND/OR/NOT operators.")
+
+            # Display and manage query groups
+            for idx, group in enumerate(st.session_state.query_groups):
+                st.markdown(f"**Group {idx + 1}**")
+
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    # Keywords input using st_tags
+                    group['terms'] = st_tags(
+                        label=f"Keywords for Group {idx + 1}",
+                        text="Press enter to add more",
+                        value=group['terms'],
+                        key=f'group_{idx}_terms'
+                    )
+
+                with col2:
+                    if idx > 0:
+                        # Operator selection for groups after the first
+                        group['operator'] = st.selectbox(
+                            "Operator",
+                            options=["AND", "OR", "NOT"],
+                            index=["AND", "OR", "NOT"].index(group['operator']),
+                            key=f'group_{idx}_operator'
+                        )
+                    else:
+                        st.write("")  # Spacer
+
+                # Remove group button
+                if len(st.session_state.query_groups) > 1:
+                    if st.button(f"Remove Group {idx + 1}", key=f'remove_group_{idx}'):
+                        st.session_state.query_groups.pop(idx)
+                        st.rerun()
+
+            # Add group button
+            if st.button("➕ Add Group"):
+                st.session_state.query_groups.append({'terms': [], 'operator': 'AND'})
+                st.rerun()
+
+            # Build and display final query
+            query = build_query_from_groups(st.session_state.query_groups)
+            st.markdown("**Final Query:**")
+            st.code(query if query else "(empty query)")
+
             col1, col2 = st.columns(2)
             with col1:
                 start_year = st.number_input("Start Year", min_value=1900, max_value=2025, value=2000)
             with col2:
                 end_year = st.number_input("End Year", min_value=1900, max_value=2025, value=2025)
-            
+
             max_results = st.number_input("Max Results", min_value=100, max_value=50000, value=10000)
-            
+
             if analysis_mode == "Review vs Non-Review Comparison":
                 st.info("Will scrape both review and non-review papers")
         else:
@@ -275,14 +378,29 @@ def main():
         if st.session_state.scraped_data is not None:
             st.subheader("Preview")
             df = st.session_state.scraped_data
-            
+
             col1, col2, col3 = st.columns(3)
             col1.metric("Total Articles", len(df))
             col2.metric("Year Range", f"{df['Year'].min():.0f} - {df['Year'].max():.0f}")
             col3.metric("Unique Journals", df['Journal'].nunique())
-            
+
+            # Article type distribution
+            st.subheader("Article Type Distribution")
+            article_type_cols = ['Review', 'SystematicReview', 'ClinicalTrial',
+                                'MetaAnalysis', 'RCT', 'LongitudinalStudy']
+
+            if all(col in df.columns for col in article_type_cols):
+                type_counts = {col: df[col].sum() for col in article_type_cols}
+                col1, col2, col3, col4, col5, col6 = st.columns(6)
+                col1.metric("Reviews", int(type_counts['Review']))
+                col2.metric("Systematic Reviews", int(type_counts['SystematicReview']))
+                col3.metric("Clinical Trials", int(type_counts['ClinicalTrial']))
+                col4.metric("Meta-Analyses", int(type_counts['MetaAnalysis']))
+                col5.metric("RCTs", int(type_counts['RCT']))
+                col6.metric("Longitudinal", int(type_counts['LongitudinalStudy']))
+
             st.dataframe(df.head(100), use_container_width=True)
-            
+
             # Year distribution
             st.subheader("Publication Trends")
             year_counts = df['Year'].value_counts().sort_index()

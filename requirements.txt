@@ -3,6 +3,7 @@
 
 # Web Framework
 streamlit>=1.28.0
+streamlit-tags>=1.2.8
 
 # Data Processing
 pandas>=2.0.0

@@ -1,6 +1,7 @@
 """
 Enhanced Clustering Module for MedScrape
-Includes transformer-based clustering and review/non-review comparison
+Includes lightweight embeddings (Doc2Vec, FastText) and review/non-review comparison
+Optimized for performance with large document collections
 """
 
 import pandas as pd
@@ -11,7 +12,8 @@ from sklearn.decomposition import LatentDirichletAllocation, PCA
 from sklearn.manifold import TSNE
 from sklearn.metrics.pairwise import cosine_similarity
 import umap
-from sentence_transformers import SentenceTransformer
+from gensim.models.doc2vec import Doc2Vec, TaggedDocument
+from gensim.models import FastText
 import plotly.express as px
 import plotly.graph_objects as go
 from typing import Dict, List, Tuple, Optional
@@ -20,7 +22,7 @@ warnings.filterwarnings('ignore')
 
 
 class EnhancedClusterer:
-    """Enhanced clustering with transformer support and review comparison"""
+    """Enhanced clustering with lightweight embeddings (TF-IDF, Doc2Vec, FastText) and review comparison"""
     
     def __init__(self, df: pd.DataFrame, text_column: str = 'Abstract'):
         """
@@ -70,22 +72,78 @@ class EnhancedClusterer:
         self.tfidf_matrix = self.vectorizer.fit_transform(texts)
         return self.tfidf_matrix
     
-    def create_transformer_embeddings(self, model_name: str = 'all-MiniLM-L6-v2') -> np.ndarray:
+    def create_doc2vec_embeddings(self, vector_size: int = 100, epochs: int = 20) -> np.ndarray:
         """
-        Create embeddings using sentence transformers
-        
+        Create embeddings using Doc2Vec (lighter than transformers)
+
         Args:
-            model_name: Name of the sentence transformer model
-            
+            vector_size: Dimension of document vectors
+            epochs: Number of training epochs
+
         Returns:
             Embedding matrix
         """
         texts = self.preprocess_text()
-        
-        model = SentenceTransformer(model_name)
-        self.embeddings = model.encode(texts.tolist(), 
-                                       show_progress_bar=True,
-                                       batch_size=32)
+
+        # Tokenize documents
+        tagged_data = [TaggedDocument(words=text.lower().split(), tags=[str(i)])
+                       for i, text in enumerate(texts)]
+
+        # Train Doc2Vec model
+        model = Doc2Vec(
+            vector_size=vector_size,
+            min_count=2,
+            epochs=epochs,
+            workers=4,
+            dm=1  # PV-DM (distributed memory)
+        )
+
+        model.build_vocab(tagged_data)
+        model.train(tagged_data, total_examples=model.corpus_count, epochs=model.epochs)
+
+        # Generate embeddings
+        self.embeddings = np.array([model.dv[str(i)] for i in range(len(texts))])
+        return self.embeddings
+
+    def create_fasttext_embeddings(self, vector_size: int = 100, epochs: int = 10) -> np.ndarray:
+        """
+        Create embeddings using FastText (very lightweight and fast)
+
+        Args:
+            vector_size: Dimension of word vectors
+            epochs: Number of training epochs
+
+        Returns:
+            Embedding matrix (averaged word vectors per document)
+        """
+        texts = self.preprocess_text()
+
+        # Tokenize documents
+        sentences = [text.lower().split() for text in texts]
+
+        # Train FastText model
+        model = FastText(
+            sentences=sentences,
+            vector_size=vector_size,
+            window=5,
+            min_count=2,
+            epochs=epochs,
+            workers=4
+        )
+
+        # Generate document embeddings by averaging word vectors
+        embeddings = []
+        for sent in sentences:
+            # Get vectors for words that exist in vocabulary
+            word_vecs = [model.wv[word] for word in sent if word in model.wv]
+            if word_vecs:
+                # Average word vectors
+                embeddings.append(np.mean(word_vecs, axis=0))
+            else:
+                # Use zero vector if no words found
+                embeddings.append(np.zeros(vector_size))
+
+        self.embeddings = np.array(embeddings)
         return self.embeddings
     
     def cluster_kmeans(self, features: np.ndarray, n_clusters: int = 8) -> np.ndarray:
@@ -162,13 +220,13 @@ class EnhancedClusterer:
                           reduction_method: str = 'pca') -> Dict:
         """
         Complete pipeline: embed, cluster, and reduce
-        
+
         Args:
             method: Clustering method ('kmeans', 'dbscan', 'hierarchical', 'lda')
             n_clusters: Number of clusters (for applicable methods)
-            embedding_type: 'tfidf' or 'transformer'
+            embedding_type: 'tfidf', 'doc2vec', or 'fasttext'
             reduction_method: 'pca', 'tsne', or 'umap'
-            
+
         Returns:
             Dictionary with results
         """
@@ -177,8 +235,12 @@ class EnhancedClusterer:
             features = self.create_tfidf_features()
             if hasattr(features, 'toarray'):
                 features = features.toarray()
-        else:  # transformer
-            features = self.create_transformer_embeddings()
+        elif embedding_type == 'doc2vec':
+            features = self.create_doc2vec_embeddings()
+        elif embedding_type == 'fasttext':
+            features = self.create_fasttext_embeddings()
+        else:
+            raise ValueError(f"Unknown embedding type: {embedding_type}")
         
         # Cluster
         if method == 'kmeans':

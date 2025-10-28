@@ -316,8 +316,12 @@ def main():
         
         embedding_type = st.selectbox(
             "Embedding Method",
-            ["TF-IDF", "Transformer (BERT)"],
-            help="Transformer embeddings capture semantic meaning better but are slower"
+            ["TF-IDF", "Doc2Vec", "FastText"],
+            help="""
+            • TF-IDF: Fastest, best for keyword-based clustering (recommended)
+            • Doc2Vec: Captures document semantics, moderate speed
+            • FastText: Lightweight word embeddings, good balance
+            """
         )
         
         clustering_method = st.selectbox(
@@ -423,7 +427,12 @@ def main():
                     clusterer = EnhancedClusterer(df, text_column='Abstract')
                     
                     # Run clustering
-                    embed_type = 'tfidf' if embedding_type == "TF-IDF" else 'transformer'
+                    embed_type_map = {
+                        "TF-IDF": "tfidf",
+                        "Doc2Vec": "doc2vec",
+                        "FastText": "fasttext"
+                    }
+                    embed_type = embed_type_map[embedding_type]
                     method_map = {
                         "K-Means": "kmeans",
                         "DBSCAN": "dbscan",
@@ -494,7 +503,12 @@ def main():
                     )
                     
                     # Cluster both
-                    embed_type = 'tfidf' if embedding_type == "TF-IDF" else 'transformer'
+                    embed_type_map = {
+                        "TF-IDF": "tfidf",
+                        "Doc2Vec": "doc2vec",
+                        "FastText": "fasttext"
+                    }
+                    embed_type = embed_type_map[embedding_type]
                     method_map = {
                         "K-Means": "kmeans",
                         "DBSCAN": "dbscan",

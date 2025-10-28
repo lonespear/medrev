@@ -1,0 +1,101 @@
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                     GIT PUSH - QUICK REFERENCE                            ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+🚀 FASTEST METHOD: Use the automated script
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+bash /mnt/user-data/outputs/git_push_setup.sh
+
+The script handles everything automatically. Just run it and follow prompts.
+
+📋 IF YOU PREFER MANUAL: Quick commands
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# 1. Setup (one-time)
+git config --global user.name "Your Name"
+git config --global user.email "your@email.com"
+
+# 2. Authenticate with GitHub
+gh auth login
+# OR use Personal Access Token when prompted for password
+
+# 3. Clone and prepare
+cd /tmp
+git clone https://github.com/lonespear/medscrape.git
+cd medscrape
+
+# 4. Copy all files at once
+cp /mnt/user-data/outputs/*.py .
+cp /mnt/user-data/outputs/*.txt .
+cp /mnt/user-data/outputs/*.md .
+mkdir -p docs
+cp /mnt/user-data/outputs/*.docx docs/
+
+# 5. Commit and push
+git add -A
+git commit -m "Add AI-assisted literature review enhancements"
+git push origin main
+
+# 6. Verify
+# Visit: https://github.com/lonespear/medscrape
+
+🔐 AUTHENTICATION OPTIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Option 1: GitHub CLI (easiest)
+  gh auth login
+
+Option 2: Personal Access Token
+  1. GitHub.com → Settings → Developer settings → Tokens
+  2. Generate token with 'repo' permissions
+  3. Use token as password when pushing
+
+Option 3: SSH Key
+  ssh-keygen -t ed25519 -C "your@email.com"
+  cat ~/.ssh/id_ed25519.pub  # Add this to GitHub
+
+🌐 AFTER PUSHING: Deploy to Streamlit Cloud
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Go to: https://share.streamlit.io/
+2. Click "New app"
+3. Repository: lonespear/medscrape
+4. Main file: app_enhanced.py
+5. Deploy!
+
+📁 FILES TO BE PUSHED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Root directory:
+  ✓ clustering_enhanced.py    (new - core clustering module)
+  ✓ app_enhanced.py            (new - enhanced Streamlit app)
+  ✓ requirements.txt           (updated)
+  ✓ README.md                  (updated)
+  ✓ IMPLEMENTATION_GUIDE.txt   (new)
+  ✓ 00_START_HERE.txt          (new)
+
+docs/ directory (new):
+  ✓ tables_and_figures.txt
+  ✓ manuscript_complete.docx
+  ✓ PROJECT_SUMMARY.txt
+
+❗ IMPORTANT NOTES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• I cannot push directly without your GitHub credentials
+• You must authenticate before pushing
+• If push fails, check authentication and repository permissions
+• For detailed instructions, see: GIT_PUSH_INSTRUCTIONS.txt
+
+💡 NEED HELP?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Detailed instructions: GIT_PUSH_INSTRUCTIONS.txt
+Automated script:      git_push_setup.sh
+Full documentation:    00_START_HERE.txt
+
+╔═══════════════════════════════════════════════════════════════════════════╗
+║  All files are ready in: /mnt/user-data/outputs/                         ║
+║  Choose your method and push when ready!                                  ║
+╚═══════════════════════════════════════════════════════════════════════════╝

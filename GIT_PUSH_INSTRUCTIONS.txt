@@ -1,0 +1,181 @@
+GIT PUSH INSTRUCTIONS - MANUAL METHOD
+=====================================
+
+If you prefer to push manually instead of using the script, follow these steps:
+
+OPTION A: PUSH FROM YOUR LOCAL MACHINE (RECOMMENDED)
+=====================================================
+
+1. Download all files from /mnt/user-data/outputs/ to your local machine
+
+2. Navigate to your local medscrape repository:
+   cd /path/to/your/medscrape
+
+3. Copy the new files to your repo:
+   - clustering_enhanced.py
+   - app_enhanced.py
+   - requirements.txt
+   - README.md
+   - IMPLEMENTATION_GUIDE.txt
+   - 00_START_HERE.txt
+   
+   Create a docs/ folder and copy:
+   - docs/tables_and_figures.txt
+   - docs/manuscript_complete.docx
+   - docs/PROJECT_SUMMARY.txt
+
+4. Check what changed:
+   git status
+
+5. Stage all changes:
+   git add -A
+
+6. Commit:
+   git commit -m "Add AI-assisted literature review enhancements
+
+   - Add clustering_enhanced.py with transformer support
+   - Add app_enhanced.py with gap analysis features  
+   - Add comprehensive documentation
+   - Add complete manuscript
+   - Update README with new features
+   
+   Features:
+   - Transformer-based clustering (BERT embeddings)
+   - Review vs. non-review comparison
+   - Quantitative gap identification
+   - Interactive visualizations
+   - Export functionality"
+
+7. Push to GitHub:
+   git push origin main
+
+OPTION B: USE THE AUTOMATED SCRIPT
+===================================
+
+Simply run the provided script:
+   bash /mnt/user-data/outputs/git_push_setup.sh
+
+The script will:
+- Configure git if needed
+- Clone the repository
+- Copy all enhanced files
+- Stage and commit changes
+- Offer to push (or give you instructions)
+
+OPTION C: PUSH DIRECTLY FROM THIS ENVIRONMENT
+==============================================
+
+If you have GitHub credentials available, you can authenticate and push directly.
+
+Step 1: Configure Git
+   git config --global user.name "Your Name"
+   git config --global user.email "your.email@example.com"
+
+Step 2: Authenticate with GitHub (choose one method):
+
+   Method 1 - Personal Access Token (HTTPS):
+   a. Go to GitHub.com → Settings → Developer settings → Personal access tokens → Tokens (classic)
+   b. Generate new token with 'repo' permissions
+   c. Use this when prompted for password during git push
+
+   Method 2 - GitHub CLI:
+   gh auth login
+   (Follow the prompts to authenticate)
+
+   Method 3 - SSH Key:
+   a. Generate SSH key: ssh-keygen -t ed25519 -C "your.email@example.com"
+   b. Add to ssh-agent: eval "$(ssh-agent -s)" && ssh-add ~/.ssh/id_ed25519
+   c. Add public key to GitHub: cat ~/.ssh/id_ed25519.pub
+      (Copy this and add to GitHub → Settings → SSH keys)
+
+Step 3: Clone and Setup
+   cd /tmp
+   git clone https://github.com/lonespear/medscrape.git
+   cd medscrape
+
+Step 4: Copy Files
+   cp /mnt/user-data/outputs/clustering_enhanced.py .
+   cp /mnt/user-data/outputs/app_enhanced.py .
+   cp /mnt/user-data/outputs/requirements.txt .
+   cp /mnt/user-data/outputs/README.md .
+   cp /mnt/user-data/outputs/IMPLEMENTATION_GUIDE.txt .
+   cp /mnt/user-data/outputs/00_START_HERE.txt .
+   
+   mkdir -p docs
+   cp /mnt/user-data/outputs/tables_and_figures.txt docs/
+   cp /mnt/user-data/outputs/manuscript_complete.docx docs/
+   cp /mnt/user-data/outputs/PROJECT_SUMMARY.txt docs/
+
+Step 5: Commit and Push
+   git add -A
+   git commit -m "Add AI-assisted literature review enhancements"
+   git push origin main
+
+TROUBLESHOOTING
+===============
+
+Problem: "Permission denied" when pushing
+Solution: 
+  - Verify you have write access to the repository
+  - Check your authentication (token, SSH key, or GitHub CLI)
+  - Make sure you're authenticated as the repository owner
+
+Problem: "Remote contains work that you do not have locally"
+Solution:
+  git pull origin main --rebase
+  git push origin main
+
+Problem: "Authentication failed"  
+Solution:
+  - If using HTTPS: Use a Personal Access Token, not your password
+  - If using SSH: Ensure your SSH key is added to GitHub
+  - Try: gh auth login (if GitHub CLI is installed)
+
+Problem: "Branch protection rules"
+Solution:
+  - Create a pull request instead of direct push
+  - Or temporarily disable branch protection in GitHub settings
+
+VERIFYING THE PUSH
+==================
+
+After pushing, verify at:
+  https://github.com/lonespear/medscrape
+
+You should see:
+  ✓ New files: clustering_enhanced.py, app_enhanced.py
+  ✓ Updated: README.md, requirements.txt
+  ✓ New docs/ folder with documentation
+  ✓ Your commit message in the commit history
+
+DEPLOYING TO STREAMLIT CLOUD
+=============================
+
+After pushing to GitHub:
+
+1. Go to: https://share.streamlit.io/
+2. Sign in with GitHub
+3. Click "New app"
+4. Repository: lonespear/medscrape
+5. Branch: main
+6. Main file: app_enhanced.py
+7. Click "Deploy"
+
+The app will be live at:
+  https://medscrape.streamlit.app/
+  (or similar URL provided by Streamlit)
+
+NEXT STEPS AFTER PUSHING
+=========================
+
+1. ✓ Verify files are on GitHub
+2. ✓ Test the app locally: streamlit run app_enhanced.py
+3. ✓ Deploy to Streamlit Cloud (see above)
+4. ✓ Update paper with final deployment URL
+5. ✓ Generate figures from your actual data
+6. ✓ Finalize manuscript
+7. ✓ Submit for publication
+
+=====================================
+Need help? Contact: diana.thomas@westpoint.edu
+=====================================

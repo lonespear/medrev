@@ -31,6 +31,16 @@ st.markdown("""
     .stAlert {
         margin-top: 1rem;
     }
+    /* Make sidebar wider */
+    [data-testid="stSidebar"][aria-expanded="true"] {
+        min-width: 450px;
+        max-width: 450px;
+    }
+    [data-testid="stSidebar"][aria-expanded="false"] {
+        min-width: 450px;
+        max-width: 450px;
+        margin-left: -450px;
+    }
     </style>
 """, unsafe_allow_html=True)
 

@@ -1,0 +1,23 @@
+# MedScrape Requirements
+# Medical Literature Review Application
+
+# Web Framework
+streamlit>=1.28.0
+
+# Data Processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Machine Learning & NLP
+scikit-learn>=1.3.0
+sentence-transformers>=2.2.0
+umap-learn>=0.5.3
+
+# Biomedical Data Access
+biopython>=1.81
+
+# Visualization
+plotly>=5.17.0
+
+# Topic Modeling (included in scikit-learn but good to specify)
+# LatentDirichletAllocation is part of sklearn.decomposition

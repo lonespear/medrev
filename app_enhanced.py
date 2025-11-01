@@ -1092,7 +1092,7 @@ def main():
     st.markdown("""
     <div style='text-align: center'>
         <p>Developed by the Department of Mathematical Sciences, United States Military Academy</p>
-        <p>📧 Contact: diana.thomas@westpoint.edu | 🔗 <a href='https://github.com/lonespear/medscrape'>GitHub</a></p>
+        <p>📧 Contact: jonathan.day@westpoint.edu | 🔗 <a href='https://github.com/lonespear/medrev'>GitHub</a></p>
     </div>
     """, unsafe_allow_html=True)
 

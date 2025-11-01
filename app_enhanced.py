@@ -13,6 +13,8 @@ import io
 import re
 from streamlit_tags import st_tags
 from clustering_enhanced import EnhancedClusterer, ReviewComparator, create_interactive_plot
+import plotly.express as px
+import plotly.graph_objects as go
 
 # Page configuration
 st.set_page_config(
@@ -228,6 +230,199 @@ def build_query_from_groups(query_groups):
     return " ".join(query_parts)
 
 
+def create_intelligent_publication_trends(df: pd.DataFrame):
+    """
+    Create intelligent, adaptive publication trends visualization based on data characteristics.
+
+    Args:
+        df: DataFrame with 'Year' column
+    """
+    if df is None or df.empty or 'Year' not in df.columns:
+        st.warning("No data available for publication trends.")
+        return
+
+    # Remove NaN years and get statistics
+    df_clean = df[df['Year'].notna()].copy()
+    if df_clean.empty:
+        st.warning("No valid year data available.")
+        return
+
+    year_counts = df_clean['Year'].value_counts().sort_index()
+    unique_years = len(year_counts)
+    year_range = int(df_clean['Year'].max() - df_clean['Year'].min())
+    total_papers = len(df_clean)
+
+    st.subheader("📊 Publication Trends")
+
+    # Adaptive display based on year range
+    if unique_years == 1:
+        # Single year: Show summary card instead of plot
+        single_year = int(df_clean['Year'].iloc[0])
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Publication Year", single_year)
+        col2.metric("Total Articles", total_papers)
+        col3.metric("Year Range", "Single Year")
+
+        st.info("""
+        ℹ️ **Single-year dataset detected.** Timeline visualization is not helpful with data from only one year.
+        Consider expanding your year range in the search parameters for trend analysis.
+        """)
+
+        # Show article type breakdown if available
+        article_type_cols = ['Review', 'SystematicReview', 'ClinicalTrial',
+                            'MetaAnalysis', 'RCT', 'LongitudinalStudy']
+        if all(col in df_clean.columns for col in article_type_cols):
+            st.markdown("**Article Type Distribution:**")
+            type_data = {
+                'Type': ['Reviews', 'Systematic Reviews', 'Clinical Trials',
+                        'Meta-Analyses', 'RCTs', 'Longitudinal'],
+                'Count': [df_clean[col].sum() for col in article_type_cols]
+            }
+            type_df = pd.DataFrame(type_data)
+            type_df = type_df[type_df['Count'] > 0]  # Only show types with data
+
+            fig = px.bar(
+                type_df,
+                x='Type',
+                y='Count',
+                title=f'Article Types in {single_year}',
+                color='Count',
+                color_continuous_scale='Blues'
+            )
+            fig.update_layout(showlegend=False, height=400)
+            st.plotly_chart(fig, use_container_width=True)
+
+    elif unique_years == 2:
+        # Two years: Show year-over-year comparison
+        years_list = sorted(year_counts.index)
+        year1, year2 = int(years_list[0]), int(years_list[1])
+        count1, count2 = year_counts[year1], year_counts[year2]
+
+        change = count2 - count1
+        pct_change = ((count2 - count1) / count1 * 100) if count1 > 0 else 0
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric(f"{year1}", f"{count1} articles")
+        col2.metric(f"{year2}", f"{count2} articles")
+        col3.metric("Change", f"{change:+d} articles")
+        col4.metric("Growth Rate", f"{pct_change:+.1f}%")
+
+        # Simple comparison bar chart
+        fig = go.Figure(data=[
+            go.Bar(
+                x=[str(year1), str(year2)],
+                y=[count1, count2],
+                text=[count1, count2],
+                textposition='auto',
+                marker_color=['#636EFA', '#EF553B']
+            )
+        ])
+        fig.update_layout(
+            title='Year-over-Year Comparison',
+            xaxis_title='Year',
+            yaxis_title='Number of Publications',
+            height=400,
+            showlegend=False
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.info("""
+        ℹ️ **Two-year dataset.** Consider expanding your year range to 3+ years for better trend analysis.
+        """)
+
+    else:
+        # 3+ years: Full interactive timeline with trend analysis
+
+        # Calculate trend metrics
+        avg_per_year = total_papers / unique_years
+        min_year, max_year = int(df_clean['Year'].min()), int(df_clean['Year'].max())
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Year Range", f"{min_year} - {max_year}")
+        col2.metric("Total Papers", total_papers)
+        col3.metric("Years Covered", unique_years)
+        col4.metric("Avg per Year", f"{avg_per_year:.1f}")
+
+        # Create interactive Plotly timeline
+        timeline_df = pd.DataFrame({
+            'Year': year_counts.index,
+            'Publications': year_counts.values
+        })
+
+        # Add trend line
+        z = np.polyfit(timeline_df['Year'], timeline_df['Publications'], 1)
+        p = np.poly1d(z)
+        timeline_df['Trend'] = p(timeline_df['Year'])
+
+        fig = go.Figure()
+
+        # Bar chart
+        fig.add_trace(go.Bar(
+            x=timeline_df['Year'],
+            y=timeline_df['Publications'],
+            name='Publications',
+            marker_color='#636EFA',
+            hovertemplate='<b>Year %{x}</b><br>Publications: %{y}<extra></extra>'
+        ))
+
+        # Trend line
+        fig.add_trace(go.Scatter(
+            x=timeline_df['Year'],
+            y=timeline_df['Trend'],
+            name='Trend',
+            line=dict(color='red', width=2, dash='dash'),
+            hovertemplate='<b>Trend</b><br>Year %{x}<br>Expected: %{y:.1f}<extra></extra>'
+        ))
+
+        fig.update_layout(
+            title='Publication Timeline with Trend Analysis',
+            xaxis_title='Year',
+            yaxis_title='Number of Publications',
+            height=500,
+            hovermode='x unified',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Growth analysis
+        if unique_years >= 5:
+            # Calculate year-over-year growth rates
+            growth_rates = []
+            for i in range(1, len(timeline_df)):
+                prev_count = timeline_df.iloc[i-1]['Publications']
+                curr_count = timeline_df.iloc[i]['Publications']
+                if prev_count > 0:
+                    growth_rate = ((curr_count - prev_count) / prev_count * 100)
+                    growth_rates.append(growth_rate)
+
+            if growth_rates:
+                avg_growth = np.mean(growth_rates)
+
+                st.markdown("### 📈 Growth Metrics")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Avg Annual Growth", f"{avg_growth:.1f}%")
+                col2.metric("Peak Year", f"{timeline_df['Publications'].idxmax()}")
+                col3.metric("Peak Publications", f"{timeline_df['Publications'].max()}")
+
+                # Trend interpretation
+                if avg_growth > 10:
+                    st.success("📈 Strong upward trend - Growing research interest in this area")
+                elif avg_growth > 0:
+                    st.info("➡️ Moderate growth - Steady research activity")
+                elif avg_growth > -10:
+                    st.warning("📉 Slight decline - Research interest may be stabilizing")
+                else:
+                    st.error("📉 Significant decline - Decreasing research activity")
+
+
 def main():
     """Main application"""
     
@@ -241,24 +436,56 @@ def main():
     # Sidebar
     with st.sidebar:
         st.header("⚙️ Configuration")
-        
+
+        st.markdown("### 📋 Analysis Mode")
         analysis_mode = st.radio(
-            "Analysis Mode",
+            "Select analysis type",
             ["Single Search", "Review vs Non-Review Comparison"],
-            help="Choose between basic clustering or comparing review and research papers"
+            help="Single Search: Cluster all papers together. Comparison: Identify gaps between review and research papers."
+        )
+
+        if analysis_mode == "Single Search":
+            st.info("💡 Performs clustering analysis on all collected papers to identify research themes.")
+        else:
+            st.info("💡 Compares review papers against research papers to identify under-reviewed topics (Gap Analysis).")
+
+        st.markdown("---")
+
+        # Data source
+        st.markdown("### 📁 Data Source")
+        data_source = st.radio(
+            "Choose data input method",
+            ["Scrape PubMed", "Upload CSV"],
+            help="Scrape PubMed directly or upload your own CSV file"
         )
         
-        st.markdown("---")
-        
-        # Data source
-        data_source = st.radio("Data Source", ["Scrape PubMed", "Upload CSV"])
-        
         if data_source == "Scrape PubMed":
-            st.subheader("PubMed Search")
-            email = st.text_input("Email (required by NCBI)", value="user@example.com")
+            st.subheader("🔍 PubMed Search")
+            email = st.text_input(
+                "Email (required by NCBI)",
+                value="user@example.com",
+                help="NCBI requires an email address for API access. This is used for tracking and rate limiting."
+            )
 
-            st.markdown("### Query Builder")
-            st.markdown("Build your query by adding keyword groups. Terms within each group are combined with OR, and groups are chained with AND/OR/NOT operators.")
+            st.markdown("### 🔎 Query Builder")
+            with st.expander("ℹ️ How to Build Queries", expanded=False):
+                st.markdown("""
+                **Query Building Logic:**
+                - **Within a group**: Keywords are combined with OR (any keyword matches)
+                - **Between groups**: Groups are combined with AND/OR/NOT operators
+
+                **Examples:**
+                - Group 1: `nutrition, diet` → matches papers with "nutrition" OR "diet"
+                - Group 2: `genetics, genomics` → matches papers with "genetics" OR "genomics"
+                - Combined with AND: Papers must mention (nutrition OR diet) AND (genetics OR genomics)
+
+                **Tips:**
+                - Use multiple groups to narrow down results
+                - Use NOT operator to exclude unwanted topics
+                - Add more specific terms if you get too many results
+                """)
+
+            st.markdown("**Build your search query:**")
 
             # Display and manage query groups
             for idx, group in enumerate(st.session_state.query_groups):
@@ -302,13 +529,41 @@ def main():
             st.markdown("**Final Query:**")
             st.code(query if query else "(empty query)")
 
+            st.markdown("### 📅 Search Parameters")
             col1, col2 = st.columns(2)
             with col1:
-                start_year = st.number_input("Start Year", min_value=1900, max_value=2025, value=2000)
+                start_year = st.number_input(
+                    "Start Year",
+                    min_value=1900,
+                    max_value=2025,
+                    value=2000,
+                    help="Filter publications from this year onwards"
+                )
             with col2:
-                end_year = st.number_input("End Year", min_value=1900, max_value=2025, value=2025)
+                end_year = st.number_input(
+                    "End Year",
+                    min_value=1900,
+                    max_value=2025,
+                    value=2025,
+                    help="Filter publications up to this year"
+                )
 
-            max_results = st.number_input("Max Results", min_value=100, max_value=50000, value=10000)
+            # Data validation warnings
+            year_range = end_year - start_year
+            if year_range == 0:
+                st.warning("⚠️ **Single-year search**: Publication trends will show limited data. Consider expanding your year range.")
+            elif year_range == 1:
+                st.warning("⚠️ **Two-year search**: Trend analysis will be limited. Recommend 3+ years for better insights.")
+            elif year_range < 5:
+                st.info("ℹ️ Short time span selected. Trend analysis will be basic.")
+
+            max_results = st.number_input(
+                "Max Results",
+                min_value=100,
+                max_value=50000,
+                value=10000,
+                help="Maximum number of papers to retrieve. More papers = longer processing time but more comprehensive results."
+            )
 
             if analysis_mode == "Review vs Non-Review Comparison":
                 st.info("Will scrape both review and non-review papers")
@@ -320,41 +575,14 @@ def main():
             """)
         
         st.markdown("---")
-        
-        # Clustering parameters
-        st.subheader("🧠 Clustering Settings")
-        
-        embedding_type = st.selectbox(
-            "Embedding Method",
-            ["TF-IDF", "Doc2Vec", "FastText"],
-            help="""
-            • TF-IDF: Fastest, best for keyword-based clustering (recommended)
-            • Doc2Vec: Captures document semantics, moderate speed
-            • FastText: Lightweight word embeddings, good balance
-            """
-        )
-        
-        clustering_method = st.selectbox(
-            "Clustering Algorithm",
-            ["K-Means", "DBSCAN", "Hierarchical", "LDA"],
-            help="Choose clustering algorithm"
-        )
-        
-        if clustering_method in ["K-Means", "Hierarchical", "LDA"]:
-            n_clusters = st.slider("Number of Clusters", min_value=3, max_value=20, value=8)
-        
-        reduction_method = st.selectbox(
-            "Visualization Method",
-            ["PCA", "t-SNE", "UMAP"],
-            help="Dimensionality reduction for visualization"
-        )
     
     # Main content
     tab1, tab2, tab3, tab4 = st.tabs(["📥 Data Collection", "🔍 Clustering", "🎯 Gap Analysis", "📊 Export"])
     
     # Tab 1: Data Collection
     with tab1:
-        st.header("Data Collection")
+        st.header("📥 Data Collection")
+        st.markdown("Collect literature data from PubMed or upload your own CSV file.")
         
         if data_source == "Scrape PubMed":
             if st.button("🔍 Start PubMed Scrape", type="primary"):
@@ -390,13 +618,28 @@ def main():
         
         # Display data
         if st.session_state.scraped_data is not None:
-            st.subheader("Preview")
+            st.markdown("---")
+            st.subheader("📊 Data Preview & Statistics")
+
             df = st.session_state.scraped_data
 
-            col1, col2, col3 = st.columns(3)
+            # Metrics with quick export
+            col1, col2, col3, col4 = st.columns(4)
             col1.metric("Total Articles", len(df))
             col2.metric("Year Range", f"{df['Year'].min():.0f} - {df['Year'].max():.0f}")
             col3.metric("Unique Journals", df['Journal'].nunique())
+
+            # Quick export button
+            with col4:
+                st.markdown("**Quick Export:**")
+                csv_data = export_results(df, "raw_data.csv")
+                st.download_button(
+                    label="⬇️ Download CSV",
+                    data=csv_data,
+                    file_name=f"raw_data_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    help="Download the raw scraped data before clustering"
+                )
 
             # Article type distribution
             st.subheader("Article Type Distribution")
@@ -415,10 +658,8 @@ def main():
 
             st.dataframe(df.head(100), use_container_width=True)
 
-            # Year distribution
-            st.subheader("Publication Trends")
-            year_counts = df['Year'].value_counts().sort_index()
-            st.bar_chart(year_counts)
+            # Intelligent publication trends
+            create_intelligent_publication_trends(df)
             
         if st.session_state.review_data is not None:
             st.subheader("Review Papers Preview")
@@ -427,8 +668,169 @@ def main():
     # Tab 2: Clustering
     with tab2:
         st.header("Clustering Analysis")
-        
+
         if st.session_state.scraped_data is not None:
+            # Clustering Settings
+            with st.expander("⚙️ Clustering Settings", expanded=True):
+                st.markdown("### Configure Clustering Parameters")
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown("#### Embedding Method")
+                    st.markdown("""
+                    Embedding methods convert text into numerical vectors for clustering.
+                    """)
+                    embedding_type = st.selectbox(
+                        "Select Embedding Method",
+                        ["TF-IDF", "Doc2Vec", "FastText"],
+                        help="How to convert abstracts into numerical representations"
+                    )
+
+                    # Detailed help for embedding methods
+                    if embedding_type == "TF-IDF":
+                        st.info("""
+                        **TF-IDF (Term Frequency-Inverse Document Frequency)**
+                        - ⚡ Fastest option (recommended for large datasets)
+                        - 📊 Best for keyword-based clustering
+                        - 🎯 Works well when documents differ by specific terms
+                        - ⚠️ Doesn't capture semantic meaning or word order
+                        """)
+                    elif embedding_type == "Doc2Vec":
+                        st.info("""
+                        **Doc2Vec (Document Vectors)**
+                        - 🧠 Captures semantic meaning and context
+                        - 🐢 Moderate speed (requires training)
+                        - 🎯 Good for finding conceptually similar papers
+                        - 💡 Uses neural network-based embeddings
+                        """)
+                    else:  # FastText
+                        st.info("""
+                        **FastText (Subword Embeddings)**
+                        - ⚡ Lightweight and relatively fast
+                        - 🔤 Handles rare words and typos well
+                        - 🎯 Good balance between speed and semantic understanding
+                        - 💡 Uses character-level information
+                        """)
+
+                    st.markdown("---")
+
+                    st.markdown("#### Visualization Method")
+                    st.markdown("""
+                    Dimensionality reduction projects high-dimensional embeddings into 2D for visualization.
+                    """)
+                    reduction_method = st.selectbox(
+                        "Select Visualization Method",
+                        ["PCA", "t-SNE", "UMAP"],
+                        help="How to reduce dimensions for 2D plotting"
+                    )
+
+                    # Detailed help for visualization methods
+                    if reduction_method == "PCA":
+                        st.info("""
+                        **PCA (Principal Component Analysis)**
+                        - ⚡ Very fast, deterministic results
+                        - 📐 Preserves global structure well
+                        - ⚠️ Linear method, may not capture complex patterns
+                        - 🎯 Best for: Initial exploration, large datasets
+                        """)
+                    elif reduction_method == "t-SNE":
+                        st.info("""
+                        **t-SNE (t-Distributed Stochastic Neighbor Embedding)**
+                        - 🎨 Excellent at revealing cluster structure
+                        - 🐢 Slower, non-deterministic (different runs vary)
+                        - 🎯 Preserves local structure (nearby points)
+                        - 💡 Best for: Final visualizations, smaller datasets
+                        """)
+                    else:  # UMAP
+                        st.info("""
+                        **UMAP (Uniform Manifold Approximation)**
+                        - ⚡ Faster than t-SNE, more consistent
+                        - 🎨 Preserves both local and global structure
+                        - 🎯 Good balance of speed and quality
+                        - 💡 Best for: Large datasets, general purpose
+                        """)
+
+                with col2:
+                    st.markdown("#### Clustering Algorithm")
+                    st.markdown("""
+                    Clustering algorithms group similar documents together.
+                    """)
+                    clustering_method = st.selectbox(
+                        "Select Clustering Algorithm",
+                        ["K-Means", "DBSCAN", "Hierarchical", "LDA"],
+                        help="Algorithm to identify document clusters"
+                    )
+
+                    # Detailed help for clustering algorithms
+                    if clustering_method == "K-Means":
+                        st.info("""
+                        **K-Means Clustering**
+                        - ⚡ Fast and scalable
+                        - 🎯 Creates spherical clusters of similar size
+                        - ⚙️ Requires specifying number of clusters
+                        - 💡 Best for: Well-separated topics, known cluster count
+                        """)
+                        n_clusters = st.slider(
+                            "Number of Clusters",
+                            min_value=3,
+                            max_value=20,
+                            value=8,
+                            help="How many topic clusters to identify. 5-10 works well for most literature reviews."
+                        )
+                    elif clustering_method == "DBSCAN":
+                        st.info("""
+                        **DBSCAN (Density-Based Clustering)**
+                        - 🔍 Automatically finds number of clusters
+                        - 🎯 Can identify noise/outliers
+                        - ⚙️ Sensitive to parameter settings (eps, min_samples)
+                        - 💡 Best for: Irregular cluster shapes, unknown cluster count
+                        - ⚠️ May mark many papers as noise with default settings
+                        """)
+                        st.markdown("**Advanced DBSCAN Parameters:**")
+                        st.caption("eps=0.5, min_samples=5 (hardcoded for stability)")
+                    elif clustering_method == "Hierarchical":
+                        st.info("""
+                        **Hierarchical Clustering**
+                        - 🌳 Creates tree-like cluster hierarchy
+                        - 🎯 Good for exploring relationships at multiple levels
+                        - ⚙️ Requires specifying number of clusters
+                        - 💡 Best for: Taxonomic analysis, nested topics
+                        """)
+                        n_clusters = st.slider(
+                            "Number of Clusters",
+                            min_value=3,
+                            max_value=20,
+                            value=8,
+                            help="Top-level clusters to extract from the hierarchy."
+                        )
+                    else:  # LDA
+                        st.info("""
+                        **LDA (Latent Dirichlet Allocation)**
+                        - 📝 Probabilistic topic modeling
+                        - 🎯 Documents can belong to multiple topics
+                        - ⚙️ Generates interpretable word distributions per topic
+                        - 💡 Best for: Topic modeling, mixed-topic documents
+                        - ⏱️ Slower than other methods
+                        """)
+                        n_clusters = st.slider(
+                            "Number of Topics",
+                            min_value=3,
+                            max_value=20,
+                            value=8,
+                            help="How many latent topics to discover in the literature."
+                        )
+
+                st.markdown("---")
+                st.markdown("### 💡 Quick Recommendations")
+                st.markdown("""
+                - **New users**: Start with TF-IDF + K-Means + PCA (fastest, most reliable)
+                - **Semantic analysis**: Use Doc2Vec + K-Means + UMAP (better topic coherence)
+                - **Large datasets (>5000 papers)**: TF-IDF + K-Means + PCA or UMAP
+                - **Unknown topic count**: DBSCAN (but review results carefully)
+                - **Topic modeling**: LDA + TF-IDF (most interpretable topics)
+                """)
+
             if st.button("🚀 Run Clustering", type="primary"):
                 with st.spinner("Running clustering analysis..."):
                     df = st.session_state.scraped_data
@@ -498,10 +900,14 @@ def main():
     
     # Tab 3: Gap Analysis
     with tab3:
-        st.header("Gap Analysis: Review vs Research Papers")
-        
+        st.header("🎯 Gap Analysis: Review vs Research Papers")
+        st.markdown("""
+        Identify research topics that are under-reviewed in the literature. This analysis compares
+        clusters of research papers against clusters of review papers to find gaps in coverage.
+        """)
+
         if analysis_mode == "Single Search":
-            st.info("Gap analysis is only available in 'Review vs Non-Review Comparison' mode")
+            st.info("💡 Gap analysis is only available in 'Review vs Non-Review Comparison' mode. Switch modes in the sidebar to enable this feature.")
         elif st.session_state.scraped_data is not None and st.session_state.review_data is not None:
             if st.button("🎯 Identify Research Gaps", type="primary"):
                 with st.spinner("Comparing review and research papers..."):
@@ -556,11 +962,29 @@ def main():
             # Display results
             if st.session_state.comparison_results is not None:
                 comp_results = st.session_state.comparison_results
-                
-                st.subheader("Coverage Heatmap")
+
+                st.markdown("---")
+                st.subheader("📊 Coverage Heatmap")
+
+                with st.expander("ℹ️ How to Interpret the Heatmap", expanded=False):
+                    st.markdown("""
+                    **Understanding the Heatmap:**
+                    - **X-axis**: Review paper clusters
+                    - **Y-axis**: Research paper clusters
+                    - **Colors**: Similarity scores (0 = no overlap, 1 = identical)
+                        - 🟢 **Green (>0.5)**: Research cluster is well-covered by reviews
+                        - 🟡 **Yellow (0.3-0.5)**: Moderate coverage
+                        - 🔴 **Red (<0.3)**: Research gap - poorly covered by existing reviews
+
+                    **What This Means:**
+                    - Red rows indicate research topics that lack comprehensive review coverage
+                    - These are potential targets for new review papers
+                    - Green rows indicate research areas already well-synthesized
+                    """)
+
                 st.markdown("""
-                This heatmap shows how well review papers cover each research cluster.
-                **Low values (red)** indicate research gaps poorly covered by existing reviews.
+                This heatmap shows the similarity between research and review paper clusters.
+                **Red areas** indicate research gaps where existing reviews provide limited coverage.
                 """)
                 
                 # Create heatmap
@@ -595,7 +1019,11 @@ def main():
     
     # Tab 4: Export
     with tab4:
-        st.header("Export Results")
+        st.header("📊 Export Results")
+        st.markdown("""
+        Download your analysis results in CSV format for further analysis, reporting, or publication.
+        All exports include timestamps for version tracking.
+        """)
         
         if st.session_state.clustering_results is not None:
             st.subheader("Download Clustered Data")

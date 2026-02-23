@@ -4,11 +4,12 @@ Includes lightweight embeddings (Doc2Vec, FastText) and review/non-review compar
 Optimized for performance with large document collections
 """
 
+import re
 import pandas as pd
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering
-from sklearn.decomposition import LatentDirichletAllocation, PCA
+from sklearn.decomposition import LatentDirichletAllocation, PCA, TruncatedSVD
 from sklearn.manifold import TSNE
 from sklearn.metrics.pairwise import cosine_similarity
 import umap
@@ -41,10 +42,18 @@ class EnhancedClusterer:
         self.reduced_features = None
         
     def preprocess_text(self) -> pd.Series:
-        """Basic text preprocessing"""
-        texts = self.df[self.text_column].fillna('')
-        # Remove empty abstracts
-        self.df = self.df[texts.str.len() > 0].reset_index(drop=True)
+        """Basic text preprocessing: strip HTML tags, normalize whitespace, drop empties."""
+        def clean(text):
+            if not isinstance(text, str):
+                return ''
+            # Strip HTML/XML tags (<sup>, <sub>, <i>, etc.)
+            text = re.sub(r'<[^>]+>', ' ', text)
+            # Collapse whitespace
+            text = re.sub(r'\s+', ' ', text).strip()
+            return text
+
+        self.df[self.text_column] = self.df[self.text_column].fillna('').apply(clean)
+        self.df = self.df[self.df[self.text_column].str.len() > 0].reset_index(drop=True)
         return self.df[self.text_column]
     
     def create_tfidf_features(self, max_features: int = 5000, 
@@ -230,41 +239,60 @@ class EnhancedClusterer:
         Returns:
             Dictionary with results
         """
-        # Create embeddings
-        if embedding_type == 'tfidf':
-            features = self.create_tfidf_features()
-            if hasattr(features, 'toarray'):
-                features = features.toarray()
+        # LDA uses TF-IDF internally — handle separately
+        if method == 'lda':
+            sparse = self.create_tfidf_features()
+            labels, top_words = self.topic_modeling_lda(n_clusters)
+            # Reduce the sparse TF-IDF for visualization via TruncatedSVD
+            n_svd = min(50, sparse.shape[1] - 1)
+            features = TruncatedSVD(n_components=n_svd, random_state=42).fit_transform(sparse)
+        elif embedding_type == 'tfidf':
+            sparse = self.create_tfidf_features()
+            # TruncatedSVD works directly on the sparse matrix — avoids creating a
+            # 392 MB dense array and cuts clustering time from ~2 min to ~15 sec.
+            n_svd = min(100, sparse.shape[1] - 1)
+            features = TruncatedSVD(n_components=n_svd, random_state=42).fit_transform(sparse)
+            if method == 'kmeans':
+                labels = self.cluster_kmeans(features, n_clusters)
+            elif method == 'dbscan':
+                labels = self.cluster_dbscan(features)
+            elif method == 'hierarchical':
+                labels = self.cluster_hierarchical(features, n_clusters)
+            else:
+                raise ValueError(f"Unknown clustering method: {method}")
         elif embedding_type == 'doc2vec':
             features = self.create_doc2vec_embeddings()
+            if method == 'kmeans':
+                labels = self.cluster_kmeans(features, n_clusters)
+            elif method == 'dbscan':
+                labels = self.cluster_dbscan(features)
+            elif method == 'hierarchical':
+                labels = self.cluster_hierarchical(features, n_clusters)
+            else:
+                raise ValueError(f"Unknown clustering method: {method}")
         elif embedding_type == 'fasttext':
             features = self.create_fasttext_embeddings()
+            if method == 'kmeans':
+                labels = self.cluster_kmeans(features, n_clusters)
+            elif method == 'dbscan':
+                labels = self.cluster_dbscan(features)
+            elif method == 'hierarchical':
+                labels = self.cluster_hierarchical(features, n_clusters)
+            else:
+                raise ValueError(f"Unknown clustering method: {method}")
         else:
             raise ValueError(f"Unknown embedding type: {embedding_type}")
-        
-        # Cluster
-        if method == 'kmeans':
-            labels = self.cluster_kmeans(features, n_clusters)
-        elif method == 'dbscan':
-            labels = self.cluster_dbscan(features)
-        elif method == 'hierarchical':
-            labels = self.cluster_hierarchical(features, n_clusters)
-        elif method == 'lda':
-            labels, top_words = self.topic_modeling_lda(n_clusters)
-        else:
-            raise ValueError(f"Unknown clustering method: {method}")
-        
+
         self.cluster_labels = labels
         self.df['Cluster'] = labels
-        
-        # Reduce dimensions for visualization
+
+        # Reduce to 2D for visualization (now operating on ≤100 dims, not 5000)
         reduced = self.reduce_dimensions(features, reduction_method)
         self.df['Component_1'] = reduced[:, 0]
         self.df['Component_2'] = reduced[:, 1]
-        
-        # Get cluster summaries
+
         summaries = self.get_cluster_summaries()
-        
+
         results = {
             'df': self.df,
             'labels': labels,
@@ -272,47 +300,104 @@ class EnhancedClusterer:
             'summaries': summaries,
             'n_clusters': len(np.unique(labels[labels >= 0]))
         }
-        
+
         if method == 'lda':
             results['top_words'] = top_words
-        
+
         return results
     
     def get_cluster_summaries(self, top_n: int = 10) -> Dict[int, Dict]:
         """
-        Generate summaries for each cluster using TF-IDF
-        
-        Returns:
-            Dictionary mapping cluster ID to summary info
+        Generate cluster summaries using the global TF-IDF matrix.
+
+        - Top terms: derived from each cluster's centroid in the global TF-IDF space,
+          so inter-cluster weighting is preserved (not just per-cluster TF-IDF).
+        - Representative papers: the 5 papers with highest cosine similarity to centroid
+          (not arbitrary head() order).
+        - Auto-label: top bigram from centroid terms, or top two unigrams joined.
+        - Headline: a representative sentence extracted from the most central paper.
         """
         summaries = {}
-        
-        for cluster_id in self.df['Cluster'].unique():
-            if cluster_id == -1:  # Skip noise cluster from DBSCAN
+
+        for cluster_id in sorted(self.df['Cluster'].unique()):
+            if cluster_id == -1:
                 continue
-            
-            cluster_docs = self.df[self.df['Cluster'] == cluster_id]
-            
-            # Combine abstracts in cluster
-            combined_text = ' '.join(cluster_docs[self.text_column].fillna(''))
-            
-            # Get top TF-IDF terms
-            vectorizer = TfidfVectorizer(max_features=top_n, stop_words='english')
-            try:
-                tfidf = vectorizer.fit_transform([combined_text])
-                feature_names = vectorizer.get_feature_names_out()
-                scores = tfidf.toarray()[0]
-                top_terms = [feature_names[i] for i in scores.argsort()[-top_n:][::-1]]
-            except:
-                top_terms = []
-            
+
+            cluster_mask = (self.df['Cluster'] == cluster_id).values
+            cluster_docs = self.df[cluster_mask]
+            cluster_indices = np.where(cluster_mask)[0]
+
+            # ── Top terms via global TF-IDF centroid ──────────────────────────────
+            if self.tfidf_matrix is not None and self.vectorizer is not None:
+                cluster_vecs = self.tfidf_matrix[cluster_indices]
+                centroid = np.asarray(cluster_vecs.mean(axis=0)).flatten()
+                feature_names = self.vectorizer.get_feature_names_out()
+                top_indices = centroid.argsort()[-top_n:][::-1]
+                top_terms = [feature_names[i] for i in top_indices if centroid[i] > 0]
+
+                # ── Most representative papers: cosine sim to centroid ─────────────
+                centroid_norm = centroid / (np.linalg.norm(centroid) + 1e-10)
+                sims = np.array([
+                    np.dot(
+                        np.asarray(self.tfidf_matrix[i].todense()).flatten()
+                        / (np.linalg.norm(np.asarray(self.tfidf_matrix[i].todense()).flatten()) + 1e-10),
+                        centroid_norm
+                    )
+                    for i in cluster_indices
+                ])
+                top_local = sims.argsort()[-5:][::-1]
+                rep_papers = cluster_docs.iloc[top_local]
+            else:
+                # Fallback when TF-IDF matrix isn't available (Doc2Vec / FastText path)
+                combined = ' '.join(cluster_docs[self.text_column].fillna(''))
+                try:
+                    v = TfidfVectorizer(max_features=top_n, stop_words='english')
+                    mat = v.fit_transform([combined])
+                    fn = v.get_feature_names_out()
+                    sc = mat.toarray()[0]
+                    top_terms = [fn[i] for i in sc.argsort()[-top_n:][::-1]]
+                except Exception:
+                    top_terms = []
+                rep_papers = cluster_docs.head(5)
+
+            label = self._auto_label(top_terms)
+            headline = self._extract_snippet(
+                rep_papers[self.text_column].iloc[0] if len(rep_papers) > 0 else '',
+                top_terms
+            )
+
             summaries[cluster_id] = {
                 'size': len(cluster_docs),
+                'label': label,
                 'top_terms': top_terms,
-                'sample_titles': cluster_docs['Title'].head(3).tolist() if 'Title' in cluster_docs.columns else []
+                'headline': headline,
+                'sample_titles': rep_papers['Title'].tolist() if 'Title' in rep_papers.columns else [],
+                'sample_urls': rep_papers['URL'].tolist() if 'URL' in rep_papers.columns else [],
             }
-        
+
         return summaries
+
+    def _auto_label(self, top_terms: List[str]) -> str:
+        """Generate a short cluster label: prefer the top bigram, else join top two unigrams."""
+        bigrams = [t for t in top_terms if ' ' in t]
+        if bigrams:
+            return bigrams[0].title()
+        if len(top_terms) >= 2:
+            return f"{top_terms[0].title()} & {top_terms[1].title()}"
+        return top_terms[0].title() if top_terms else "Unlabeled"
+
+    def _extract_snippet(self, abstract: str, top_terms: List[str]) -> str:
+        """
+        Return up to 2 representative sentences from the abstract that mention
+        at least one top term.  Falls back to the first 2 substantial sentences.
+        """
+        if not abstract:
+            return ''
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', abstract) if len(s.strip()) >= 40]
+        terms_lower = {t.lower() for t in top_terms[:6]}
+        good = [s for s in sentences if any(t in s.lower() for t in terms_lower)]
+        result = good[:2] if good else sentences[:2]
+        return ' '.join(result)
 
 
 class ReviewComparator:

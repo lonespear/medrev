@@ -955,11 +955,22 @@ def main():
                 # Cluster summaries
                 st.subheader("Cluster Summaries")
                 for cluster_id, summary in results['summaries'].items():
-                    with st.expander(f"Cluster {cluster_id} ({summary['size']} papers)"):
-                        st.markdown(f"**Top Terms:** {', '.join(summary['top_terms'][:10])}")
-                        st.markdown("**Sample Titles:**")
-                        for title in summary['sample_titles']:
-                            st.markdown(f"- {title}")
+                    label = summary.get('label', f'Cluster {cluster_id}')
+                    with st.expander(f"Cluster {cluster_id} — {label}  ({summary['size']:,} papers)"):
+                        headline = summary.get('headline', '')
+                        if headline:
+                            st.markdown(f"> {headline}")
+                        st.markdown(f"**Key terms:** {', '.join(summary['top_terms'][:10])}")
+                        titles = summary.get('sample_titles', [])
+                        urls = summary.get('sample_urls', [])
+                        if titles:
+                            st.markdown("**Most representative papers:**")
+                            for i, title in enumerate(titles):
+                                url = urls[i] if i < len(urls) else None
+                                if url:
+                                    st.markdown(f"- [{title}]({url})")
+                                else:
+                                    st.markdown(f"- {title}")
                 
                 # LDA topics
                 if 'top_words' in results:

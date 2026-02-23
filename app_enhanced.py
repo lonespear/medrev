@@ -16,6 +16,9 @@ from clustering_enhanced import EnhancedClusterer, ReviewComparator, create_inte
 import plotly.express as px
 import plotly.graph_objects as go
 
+# NCBI API key — raises rate limit from 3 req/s to 10 req/s
+NCBI_API_KEY = "5a3c321d881ae6f0902a1ba96538a24e4808"
+
 # Page configuration
 st.set_page_config(
     page_title="MedScrape: AI Literature Review",
@@ -77,7 +80,8 @@ def scrape_pubmed(query: str, email: str, max_results: int = 10000,
         DataFrame with results
     """
     Entrez.email = email
-    
+    Entrez.api_key = NCBI_API_KEY
+
     # Add publication type filter
     if publication_type == "review":
         query += ' AND "review"[Publication Type]'
@@ -88,30 +92,42 @@ def scrape_pubmed(query: str, email: str, max_results: int = 10000,
     if start_year and end_year:
         query += f' AND {start_year}:{end_year}[pdat]'
     
-    # Search
+    # Search — usehistory stores results server-side so there is no ID-list cap
     try:
-        handle = Entrez.esearch(db="pubmed", term=query, retmax=max_results)
+        handle = Entrez.esearch(db="pubmed", term=query, usehistory="y")
         record = Entrez.read(handle)
-        id_list = record["IdList"]
+        total_count = int(record["Count"])
+        webenv     = record["WebEnv"]
+        query_key  = record["QueryKey"]
         handle.close()
-        
-        if not id_list:
+
+        fetch_count = min(total_count, max_results)
+
+        if fetch_count == 0:
             return pd.DataFrame()
-        
-        # Fetch details in batches
+
+        # Fetch details in batches using server-side history (no ID list needed)
         batch_size = 500
         all_records = []
-        
+
         progress_bar = st.progress(0)
         status_text = st.empty()
-        
-        for i in range(0, len(id_list), batch_size):
-            batch_ids = id_list[i:i + batch_size]
-            
-            status_text.text(f"Fetching records {i+1}-{min(i+batch_size, len(id_list))} of {len(id_list)}...")
-            progress_bar.progress(min((i + batch_size) / len(id_list), 1.0))
-            
-            handle = Entrez.efetch(db="pubmed", id=batch_ids, rettype="medline", retmode="xml")
+
+        for retstart in range(0, fetch_count, batch_size):
+            batch_end = min(retstart + batch_size, fetch_count)
+
+            status_text.text(
+                f"Fetching records {retstart + 1}–{batch_end} of {fetch_count:,}"
+                f"  (total matches on PubMed: {total_count:,})"
+            )
+            progress_bar.progress(batch_end / fetch_count)
+
+            handle = Entrez.efetch(
+                db="pubmed",
+                rettype="medline", retmode="xml",
+                retstart=retstart, retmax=batch_size,
+                webenv=webenv, query_key=query_key,
+            )
             records = Entrez.read(handle)
             handle.close()
             
@@ -173,7 +189,7 @@ def scrape_pubmed(query: str, email: str, max_results: int = 10000,
                 except Exception as e:
                     continue
             
-            time.sleep(0.5)  # Rate limiting
+            time.sleep(0.11)  # ~9 req/s — safely under the 10 req/s API-key limit
         
         progress_bar.empty()
         status_text.empty()
@@ -560,9 +576,13 @@ def main():
             max_results = st.number_input(
                 "Max Results",
                 min_value=100,
-                max_value=50000,
+                max_value=200000,
                 value=10000,
-                help="Maximum number of papers to retrieve. More papers = longer processing time but more comprehensive results."
+                help=(
+                    "Maximum papers to retrieve. PubMed has no hard cap — "
+                    "the API key allows 10 req/s so 30,000 takes ~6 min, "
+                    "100,000 takes ~20 min. Set to 0 to fetch ALL matches."
+                )
             )
 
             if analysis_mode == "Review vs Non-Review Comparison":

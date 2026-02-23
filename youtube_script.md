@@ -1,4 +1,5 @@
 # MedScrape YouTube Demo Script
+### Department of Mathematical Sciences, USMA
 
 ---
 

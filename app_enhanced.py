@@ -552,16 +552,24 @@ def main():
             st.markdown("**Build your search query:**")
 
             # Field qualifier selector — critical for avoiding millions of false matches
-            field_qualifier = st.selectbox(
+            field_label_map = {
+                "Title & Abstract (recommended)": "[Title/Abstract]",
+                "MeSH — Medical Subject Headings (most precise)": "[MeSH Terms]",
+                "All Fields (may return millions of results)": "[All Fields]",
+            }
+            field_choice = st.selectbox(
                 "Search field",
-                ["[Title/Abstract]", "[MeSH Terms]", "[All Fields]"],
+                list(field_label_map.keys()),
                 index=0,
                 help=(
-                    "[Title/Abstract] (recommended): matches terms in title or abstract only. "
-                    "[MeSH Terms]: controlled vocabulary, most precise. "
-                    "[All Fields]: searches everything including affiliations — often returns millions of results."
+                    "Title & Abstract: searches paper titles and abstracts — best for most users.\n"
+                    "MeSH: PubMed's controlled medical vocabulary; catches synonyms automatically but "
+                    "terms must match official MeSH headings exactly.\n"
+                    "All Fields: searches everything (author names, affiliations, journal names) — "
+                    "almost always too broad."
                 )
             )
+            field_qualifier = field_label_map[field_choice]
 
             # Display and manage query groups
             for idx, group in enumerate(st.session_state.query_groups):

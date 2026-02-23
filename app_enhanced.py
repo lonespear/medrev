@@ -510,7 +510,7 @@ def main():
                 start_year = st.number_input(
                     "Start Year",
                     min_value=1900,
-                    max_value=2025,
+                    max_value=2026,
                     value=2000,
                     help="Filter publications from this year onwards"
                 )
@@ -518,8 +518,8 @@ def main():
                 end_year = st.number_input(
                     "End Year",
                     min_value=1900,
-                    max_value=2025,
-                    value=2025,
+                    max_value=2026,
+                    value=2026,
                     help="Filter publications up to this year"
                 )
 

@@ -11,7 +11,6 @@ import time
 from datetime import datetime
 import io
 import re
-from streamlit_tags import st_tags
 from clustering_enhanced import EnhancedClusterer, ReviewComparator, create_interactive_plot
 import plotly.express as px
 import plotly.graph_objects as go
@@ -62,7 +61,23 @@ if 'query_groups' not in st.session_state:
     st.session_state.query_groups = [{'terms': [], 'operator': 'AND'}]
 
 
-def scrape_pubmed(query: str, email: str, max_results: int = 10000, 
+def count_pubmed_results(query: str, email: str, start_year: int = None, end_year: int = None) -> int:
+    """Return the number of PubMed records matching query without fetching them."""
+    Entrez.email = email
+    Entrez.api_key = NCBI_API_KEY
+    full_query = query
+    if start_year and end_year:
+        full_query += f' AND {start_year}:{end_year}[pdat]'
+    try:
+        handle = Entrez.esearch(db="pubmed", term=full_query, retmax=0)
+        record = Entrez.read(handle)
+        handle.close()
+        return int(record["Count"])
+    except Exception:
+        return -1
+
+
+def scrape_pubmed(query: str, email: str, max_results: int = 10000,
                   start_year: int = None, end_year: int = None,
                   publication_type: str = "all") -> pd.DataFrame:
     """
@@ -117,39 +132,41 @@ def scrape_pubmed(query: str, email: str, max_results: int = 10000,
             batch_end = min(retstart + batch_size, fetch_count)
 
             status_text.text(
-                f"Fetching records {retstart + 1}–{batch_end} of {fetch_count:,}"
+                f"Fetching records {retstart + 1:,}–{batch_end:,} of {fetch_count:,}"
                 f"  (total matches on PubMed: {total_count:,})"
             )
             progress_bar.progress(batch_end / fetch_count)
 
-            handle = Entrez.efetch(
-                db="pubmed",
-                rettype="medline", retmode="xml",
-                retstart=retstart, retmax=batch_size,
-                webenv=webenv, query_key=query_key,
-            )
-            records = Entrez.read(handle)
-            handle.close()
-            
+            try:
+                handle = Entrez.efetch(
+                    db="pubmed",
+                    rettype="medline", retmode="xml",
+                    retstart=retstart, retmax=batch_size,
+                    webenv=webenv, query_key=query_key,
+                )
+                records = Entrez.read(handle)
+                handle.close()
+            except Exception as batch_err:
+                st.warning(f"Batch {retstart + 1}–{batch_end} failed ({batch_err}). Skipping and continuing...")
+                time.sleep(2)
+                continue
+
             for record in records['PubmedArticle']:
                 try:
                     article = record['MedlineCitation']['Article']
 
-                    # Extract authors
                     authors = []
                     if 'AuthorList' in article:
                         for author in article['AuthorList']:
                             if 'LastName' in author and 'Initials' in author:
                                 authors.append(f"{author['LastName']} {author['Initials']}")
 
-                    # Extract abstract
                     abstract = ''
                     if 'Abstract' in article:
                         abstract_parts = article['Abstract'].get('AbstractText', [])
                         if abstract_parts:
                             abstract = ' '.join([str(part) for part in abstract_parts])
 
-                    # Extract year
                     year = None
                     if 'ArticleDate' in article and article['ArticleDate']:
                         year = int(article['ArticleDate'][0]['Year'])
@@ -158,7 +175,6 @@ def scrape_pubmed(query: str, email: str, max_results: int = 10000,
                         if 'Year' in pub_date:
                             year = int(pub_date['Year'])
 
-                    # Identify article types from publication type list
                     article_type_list = article.get('PublicationTypeList', [])
                     is_review = any(pub_type.lower() == "review" for pub_type in article_type_list)
                     is_sys_rev = any(pub_type.lower() == "systematic review" for pub_type in article_type_list)
@@ -166,7 +182,6 @@ def scrape_pubmed(query: str, email: str, max_results: int = 10000,
                     is_meta_analysis = any(pub_type.lower() == "meta-analysis" for pub_type in article_type_list)
                     is_rct = any(pub_type.lower() == "randomized controlled trial" for pub_type in article_type_list)
 
-                    # Detect longitudinal studies from abstract keywords
                     longitudinal_terms = ["longitudinal", "long-term follow up", "long term follow up",
                                          "follow-up", "follow up", "prospective cohort"]
                     is_longitudinal = any(term in abstract.lower() for term in longitudinal_terms)
@@ -186,18 +201,24 @@ def scrape_pubmed(query: str, email: str, max_results: int = 10000,
                         'RCT': 1 if is_rct else 0,
                         'LongitudinalStudy': 1 if is_longitudinal else 0
                     })
-                except Exception as e:
+                except Exception:
                     continue
-            
+
             time.sleep(0.11)  # ~9 req/s — safely under the 10 req/s API-key limit
-        
+
         progress_bar.empty()
         status_text.empty()
-        
-        return pd.DataFrame(all_records)
-    
+
+        if all_records:
+            return pd.DataFrame(all_records)
+        return pd.DataFrame()
+
     except Exception as e:
         st.error(f"Error scraping PubMed: {str(e)}")
+        # Return whatever was collected before the error
+        if all_records:
+            st.warning(f"Returning {len(all_records):,} records collected before the error.")
+            return pd.DataFrame(all_records)
         return pd.DataFrame()
 
 
@@ -206,15 +227,22 @@ def export_results(df: pd.DataFrame, filename: str = "results.csv") -> bytes:
     return df.to_csv(index=False).encode('utf-8')
 
 
-def build_query_from_groups(query_groups):
+def build_query_from_groups(query_groups, field="[Title/Abstract]"):
     """
     Build PubMed query string from query groups.
 
+    Each term is tagged with the chosen field qualifier (e.g. [Title/Abstract])
+    so the search is scoped properly instead of hitting all 30M+ records in the
+    full-text index.  Terms within a group are OR'd; groups are joined by the
+    selected inter-group operator (AND / OR / NOT).  Every group is always
+    wrapped in parentheses so nesting is unambiguous.
+
     Args:
-        query_groups: List of dicts with 'terms' and 'operator' keys
+        query_groups: List of dicts with 'terms' (list[str]) and 'operator' keys
+        field: PubMed field qualifier string, e.g. "[Title/Abstract]"
 
     Returns:
-        Query string
+        Query string ready to send to Entrez
     """
     if not query_groups or all(not group['terms'] for group in query_groups):
         return ""
@@ -224,24 +252,17 @@ def build_query_from_groups(query_groups):
         if not group['terms']:
             continue
 
-        # Build group query (OR all terms within the group)
-        group_query = " OR ".join([f'"{term}"' for term in group['terms']])
+        # Tag each term with the field qualifier
+        tagged = [f'"{term}"{field}' for term in group['terms']]
 
-        # Wrap in parentheses
-        if len(group['terms']) > 1:
-            group_query = f"({group_query})"
-        else:
-            group_query = f'"{group["terms"][0]}"'
+        # Always wrap the group in parentheses for unambiguous nesting
+        group_query = f"({' OR '.join(tagged)})"
 
-        # Add operator prefix for groups after the first
         if i == 0:
             query_parts.append(group_query)
         else:
             operator = group['operator']
-            if operator == "NOT":
-                query_parts.append(f"NOT {group_query}")
-            else:
-                query_parts.append(f"{operator} {group_query}")
+            query_parts.append(f"{operator} {group_query}")
 
     return " ".join(query_parts)
 
@@ -483,6 +504,33 @@ def main():
                 help="NCBI requires an email address for API access. This is used for tracking and rate limiting."
             )
 
+            st.markdown("### 📅 Search Parameters")
+            col1, col2 = st.columns(2)
+            with col1:
+                start_year = st.number_input(
+                    "Start Year",
+                    min_value=1900,
+                    max_value=2025,
+                    value=2000,
+                    help="Filter publications from this year onwards"
+                )
+            with col2:
+                end_year = st.number_input(
+                    "End Year",
+                    min_value=1900,
+                    max_value=2025,
+                    value=2025,
+                    help="Filter publications up to this year"
+                )
+
+            year_range = end_year - start_year
+            if year_range == 0:
+                st.warning("⚠️ Single-year search: trends will show limited data.")
+            elif year_range == 1:
+                st.warning("⚠️ Two-year search: recommend 3+ years for trend analysis.")
+            elif year_range < 5:
+                st.info("ℹ️ Short time span. Trend analysis will be basic.")
+
             st.markdown("### 🔎 Query Builder")
             with st.expander("ℹ️ How to Build Queries", expanded=False):
                 st.markdown("""
@@ -503,75 +551,78 @@ def main():
 
             st.markdown("**Build your search query:**")
 
+            # Field qualifier selector — critical for avoiding millions of false matches
+            field_qualifier = st.selectbox(
+                "Search field",
+                ["[Title/Abstract]", "[MeSH Terms]", "[All Fields]"],
+                index=0,
+                help=(
+                    "[Title/Abstract] (recommended): matches terms in title or abstract only. "
+                    "[MeSH Terms]: controlled vocabulary, most precise. "
+                    "[All Fields]: searches everything including affiliations — often returns millions of results."
+                )
+            )
+
             # Display and manage query groups
             for idx, group in enumerate(st.session_state.query_groups):
-                st.markdown(f"**Group {idx + 1}**")
-
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    # Keywords input using st_tags
-                    group['terms'] = st_tags(
-                        label=f"Keywords for Group {idx + 1}",
-                        text="Press enter to add more",
-                        value=group['terms'],
-                        key=f'group_{idx}_terms'
+                if idx > 0:
+                    op_key = f'group_{idx}_operator'
+                    group['operator'] = st.selectbox(
+                        f"Group {idx + 1} joins with:",
+                        options=["AND", "OR", "NOT"],
+                        index=["AND", "OR", "NOT"].index(group.get('operator', 'AND')),
+                        key=op_key
                     )
+                else:
+                    st.markdown(f"**Group {idx + 1}**")
 
-                with col2:
-                    if idx > 0:
-                        # Operator selection for groups after the first
-                        group['operator'] = st.selectbox(
-                            "Operator",
-                            options=["AND", "OR", "NOT"],
-                            index=["AND", "OR", "NOT"].index(group['operator']),
-                            key=f'group_{idx}_operator'
-                        )
-                    else:
-                        st.write("")  # Spacer
+                terms_raw = st.text_input(
+                    f"Keywords (comma-separated)",
+                    value=", ".join(group.get('terms', [])),
+                    key=f'group_{idx}_terms',
+                    placeholder="e.g. artificial intelligence, machine learning",
+                    help="Terms within a group are combined with OR."
+                )
+                group['terms'] = [t.strip() for t in terms_raw.split(',') if t.strip()]
 
-                # Remove group button
                 if len(st.session_state.query_groups) > 1:
-                    if st.button(f"Remove Group {idx + 1}", key=f'remove_group_{idx}'):
+                    if st.button(f"✕ Remove Group {idx + 1}", key=f'remove_group_{idx}'):
                         st.session_state.query_groups.pop(idx)
                         st.rerun()
 
-            # Add group button
+                if idx < len(st.session_state.query_groups) - 1:
+                    st.markdown("---")
+
             if st.button("➕ Add Group"):
                 st.session_state.query_groups.append({'terms': [], 'operator': 'AND'})
                 st.rerun()
 
-            # Build and display final query
-            query = build_query_from_groups(st.session_state.query_groups)
+            # Build and display final query — updates live on every keystroke
+            query = build_query_from_groups(st.session_state.query_groups, field=field_qualifier)
             st.markdown("**Final Query:**")
-            st.code(query if query else "(empty query)")
+            st.code(query if query else "(empty — add keywords above)")
 
-            st.markdown("### 📅 Search Parameters")
-            col1, col2 = st.columns(2)
-            with col1:
-                start_year = st.number_input(
-                    "Start Year",
-                    min_value=1900,
-                    max_value=2025,
-                    value=2000,
-                    help="Filter publications from this year onwards"
-                )
-            with col2:
-                end_year = st.number_input(
-                    "End Year",
-                    min_value=1900,
-                    max_value=2025,
-                    value=2025,
-                    help="Filter publications up to this year"
-                )
-
-            # Data validation warnings
-            year_range = end_year - start_year
-            if year_range == 0:
-                st.warning("⚠️ **Single-year search**: Publication trends will show limited data. Consider expanding your year range.")
-            elif year_range == 1:
-                st.warning("⚠️ **Two-year search**: Trend analysis will be limited. Recommend 3+ years for better insights.")
-            elif year_range < 5:
-                st.info("ℹ️ Short time span selected. Trend analysis will be basic.")
+            # Count check before committing to a full scrape
+            col_cnt, col_msg = st.columns([1, 2])
+            with col_cnt:
+                check_count = st.button("🔢 Check Count", help="Query PubMed for result count without fetching records")
+            with col_msg:
+                if check_count:
+                    if not query:
+                        st.warning("Build a query first.")
+                    else:
+                        with st.spinner("Counting..."):
+                            n = count_pubmed_results(query, email, start_year, end_year)
+                        if n < 0:
+                            st.error("Could not reach PubMed.")
+                        elif n > 100_000:
+                            st.error(f"{n:,} results — far too broad. Refine your query.")
+                        elif n > 20_000:
+                            st.warning(f"{n:,} results — large dataset, scraping will take time.")
+                        elif n == 0:
+                            st.warning("0 results — check your terms.")
+                        else:
+                            st.success(f"{n:,} results — looks good!")
 
             max_results = st.number_input(
                 "Max Results",

@@ -600,7 +600,13 @@ def main():
             # Build and display final query — updates live on every keystroke
             query = build_query_from_groups(st.session_state.query_groups, field=field_qualifier)
             st.markdown("**Final Query:**")
-            st.code(query if query else "(empty — add keywords above)")
+            st.text_area(
+                label="final_query_display",
+                value=query if query else "(empty — add keywords above)",
+                height=100,
+                disabled=True,
+                label_visibility="collapsed"
+            )
 
             # Count check before committing to a full scrape
             col_cnt, col_msg = st.columns([1, 2])

@@ -692,7 +692,15 @@ def main():
                             st.success(f"✅ Scraped {len(review_df)} reviews and {len(non_review_df)} research papers!")
         else:
             if uploaded_file is not None:
-                df = pd.read_csv(uploaded_file)
+                try:
+                    df = pd.read_csv(uploaded_file)
+                except UnicodeDecodeError:
+                    uploaded_file.seek(0)
+                    try:
+                        df = pd.read_csv(uploaded_file, encoding="utf-8-sig")  # handles BOM
+                    except UnicodeDecodeError:
+                        uploaded_file.seek(0)
+                        df = pd.read_csv(uploaded_file, encoding="cp1252")
                 required_cols = ['Title', 'Abstract', 'Authors', 'Journal', 'Year']
                 
                 if all(col in df.columns for col in required_cols):

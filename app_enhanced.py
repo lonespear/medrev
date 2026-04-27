@@ -692,15 +692,17 @@ def main():
                             st.success(f"✅ Scraped {len(review_df)} reviews and {len(non_review_df)} research papers!")
         else:
             if uploaded_file is not None:
-                try:
-                    df = pd.read_csv(uploaded_file)
-                except UnicodeDecodeError:
+                df = None
+                for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
                     uploaded_file.seek(0)
                     try:
-                        df = pd.read_csv(uploaded_file, encoding="utf-8-sig")  # handles BOM
+                        df = pd.read_csv(uploaded_file, encoding=enc)
+                        break
                     except UnicodeDecodeError:
-                        uploaded_file.seek(0)
-                        df = pd.read_csv(uploaded_file, encoding="cp1252")
+                        continue
+                if df is None:
+                    uploaded_file.seek(0)
+                    df = pd.read_csv(uploaded_file, encoding="latin-1", encoding_errors="replace")
                 required_cols = ['Title', 'Abstract', 'Authors', 'Journal', 'Year']
                 
                 if all(col in df.columns for col in required_cols):

@@ -772,6 +772,23 @@ def main():
                 col1, col2 = st.columns(2)
 
                 with col1:
+                    st.markdown("#### Text Source")
+                    st.markdown("Which text from each paper to cluster on.")
+                    text_source = st.selectbox(
+                        "Select Text Source",
+                        ["Title + Abstract", "Abstract", "Title"],
+                        help="Title is shorter but usually always present; Abstract has richer signal but may be missing in citation-only exports."
+                    )
+                    
+                    # Coverage hint so users can see if their CSV has what they picked
+                    _df_preview = st.session_state.scraped_data
+                    _n_total = len(_df_preview)
+                    _n_abs = _df_preview['Abstract'].fillna('').astype(str).str.strip().str.len().gt(0).sum() if 'Abstract' in _df_preview.columns else 0
+                    _n_tit = _df_preview['Title'].fillna('').astype(str).str.strip().str.len().gt(0).sum() if 'Title' in _df_preview.columns else 0
+                    st.caption(f"Coverage: {_n_tit}/{_n_total} have Title · {_n_abs}/{_n_total} have Abstract")
+                    
+                    st.markdown("---")
+                    
                     st.markdown("#### Embedding Method")
                     st.markdown("""
                     Embedding methods convert text into numerical vectors for clustering.
@@ -927,38 +944,48 @@ def main():
                 """)
 
             if st.button("🚀 Run Clustering", type="primary"):
-                with st.spinner("Running clustering analysis..."):
-                    df = st.session_state.scraped_data
-                    
-                    # Initialize clusterer
-                    clusterer = EnhancedClusterer(df, text_column='Abstract')
-                    
-                    # Run clustering
-                    embed_type_map = {
-                        "TF-IDF": "tfidf",
-                        "Doc2Vec": "doc2vec",
-                        "FastText": "fasttext"
-                    }
-                    embed_type = embed_type_map[embedding_type]
-                    method_map = {
-                        "K-Means": "kmeans",
-                        "DBSCAN": "dbscan",
-                        "Hierarchical": "hierarchical",
-                        "LDA": "lda"
-                    }
-                    method = method_map[clustering_method]
-                    
-                    n_clust = n_clusters if clustering_method in ["K-Means", "Hierarchical", "LDA"] else 8
-                    
-                    results = clusterer.cluster_and_reduce(
-                        method=method,
-                        n_clusters=n_clust,
-                        embedding_type=embed_type,
-                        reduction_method=reduction_method.lower()
-                    )
-                    
-                    st.session_state.clustering_results = results
-                    st.success("✅ Clustering complete!")
+                  with st.spinner("Running clustering analysis..."):
+                      df = st.session_state.scraped_data.copy()
+            
+                      # Build corpus column from the user's text-source choice
+                      title_series = df.get('Title', pd.Series([''] * len(df))).fillna('').astype(str)
+                      abstract_series = df.get('Abstract', pd.Series([''] * len(df))).fillna('').astype(str)
+            
+                      if text_source == "Title":
+                          df['_Corpus'] = title_series
+                      elif text_source == "Abstract":
+                          df['_Corpus'] = abstract_series
+                      else:  # "Title + Abstract"
+                          df['_Corpus'] = (title_series + '. ' + abstract_series).str.strip().str.rstrip('.')
+            
+                      # Fail fast with a useful message instead of sklearn's "empty vocabulary"
+                      non_empty = df['_Corpus'].str.strip().str.len().gt(0).sum()
+                      if non_empty < 2:
+                          st.error(
+                              f"Selected text source '{text_source}' has only {non_empty}/{len(df)} non-empty rows. "
+                              "Pick a different source or re-fetch the data with abstracts included."
+                          )
+                          st.stop()
+            
+                      # Pass the corpus column into the clusterer
+                      clusterer = EnhancedClusterer(df, text_column='_Corpus')
+            
+                      embed_type_map = {"TF-IDF": "tfidf", "Doc2Vec": "doc2vec", "FastText": "fasttext"}
+                      embed_type = embed_type_map[embedding_type]
+                      method_map = {"K-Means": "kmeans", "DBSCAN": "dbscan", "Hierarchical": "hierarchical", "LDA": "lda"}
+                      method = method_map[clustering_method]
+            
+                      n_clust = n_clusters if clustering_method in ["K-Means", "Hierarchical", "LDA"] else 8
+            
+                      results = clusterer.cluster_and_reduce(
+                          method=method,
+                          n_clusters=n_clust,
+                          embedding_type=embed_type,
+                          reduction_method=reduction_method.lower()
+                      )
+            
+                      st.session_state.clustering_results = results
+                      st.success("✅ Clustering complete!")
             
             # Display results
             if st.session_state.clustering_results is not None:
